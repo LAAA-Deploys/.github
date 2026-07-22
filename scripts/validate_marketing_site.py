@@ -15,12 +15,7 @@ from urllib.parse import unquote, urlsplit
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 LOGO_LIKE = re.compile(r"(?:laaa|logo|brand)", re.IGNORECASE)
 UNRESOLVED = re.compile(r"{{|}}|\bTODO\b|\bPLACEHOLDER\b", re.IGNORECASE)
-ATTR_RE = re.compile(r"([:\w-]+)\s*=\s*([\"'])(.*?)\2", re.DOTALL)
-SLOT_RE = re.compile(
-    r"<(?P<tag>[a-z][\w:-]*)(?P<attrs>[^>]*\bdata-laaa-brand-slot\s*=\s*['\"][^'\"]+['\"][^>]*)>"
-    r"(?P<body>.*?)</(?P=tag)\s*>",
-    re.IGNORECASE | re.DOTALL,
-)
+VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
 
 class DocumentAudit(HTMLParser):
@@ -45,7 +40,7 @@ class DocumentAudit(HTMLParser):
             self.ids.add(attrs["id"])
         if tag == "meta" and attrs.get("name", "").lower() == "robots":
             directives = {item.strip().lower() for item in attrs.get("content", "").split(",")}
-            self.has_noindex = "noindex" in directives
+            self.has_noindex = self.has_noindex or "noindex" in directives
         if tag == "img":
             if not attrs.get("alt", "").strip():
                 self.image_errors.append(f"Image is missing non-empty alt text: {attrs.get('src', '<no src>')}")
@@ -64,6 +59,76 @@ class DocumentAudit(HTMLParser):
                 self.fragments.append(unquote(href[1:]))
 
     handle_startendtag = handle_starttag
+
+
+class BrandMarkupAudit(HTMLParser):
+    """Collect complete nested brand-slot and wordmark elements without regex truncation."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.depth = 0
+        self.active_slots: list[dict[str, object]] = []
+        self.active_wordmarks: list[dict[str, object]] = []
+        self.slots: list[dict[str, object]] = []
+        self.wordmarks: list[dict[str, object]] = []
+
+    def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
+        tag = tag.lower()
+        attrs = {key.lower(): value or "" for key, value in attrs_list}
+        if "data-laaa-brand-slot" in attrs:
+            self.active_slots.append({
+                "tag": tag,
+                "depth": self.depth,
+                "attrs": attrs,
+                "images": [],
+                "prohibited": [],
+                "text": [],
+            })
+        classes = attrs.get("class", "").lower().split()
+        if any("wordmark" in class_name for class_name in classes):
+            self.active_wordmarks.append({
+                "tag": tag,
+                "depth": self.depth,
+                "contains_slot": "data-laaa-brand-slot" in attrs,
+                "text": [],
+            })
+        for slot in self.active_slots:
+            prohibited = slot["prohibited"]
+            if tag in {"svg", "canvas"}:
+                prohibited.append(tag)
+            if "style" in attrs:
+                prohibited.append("style")
+            if any(value.strip().lower().startswith("data:image") for value in attrs.values()):
+                prohibited.append("data:image")
+            if tag == "img":
+                slot["images"].append(attrs)
+        if "data-laaa-brand-slot" in attrs:
+            for wordmark in self.active_wordmarks:
+                wordmark["contains_slot"] = True
+        if tag not in VOID_ELEMENTS:
+            self.depth += 1
+
+    def handle_startendtag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
+        self.handle_starttag(tag, attrs_list)
+        if tag.lower() not in VOID_ELEMENTS:
+            self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        for slot in self.active_slots:
+            slot["text"].append(data)
+        for wordmark in self.active_wordmarks:
+            wordmark["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag not in VOID_ELEMENTS:
+            self.depth = max(0, self.depth - 1)
+        for active, completed in ((self.active_slots, self.slots), (self.active_wordmarks, self.wordmarks)):
+            for frame in list(reversed(active)):
+                if frame["tag"] == tag and frame["depth"] == self.depth:
+                    active.remove(frame)
+                    completed.append(frame)
+                    break
 
 
 def fail(errors: list[str], message: str) -> None:
@@ -146,23 +211,26 @@ def load_manifest(path: Path, errors: list[str]) -> dict[str, dict[str, object]]
 def audit_brand_slots(source: str, entrypoint: Path, site: Path, manifest: dict[str, dict[str, object]], errors: list[str]) -> set[Path]:
     seen_slots: dict[str, int] = {}
     approved_paths: set[Path] = set()
-    for match in SLOT_RE.finditer(source):
-        attrs = {key.lower(): value for key, _, value in ATTR_RE.findall(match.group("attrs"))}
+    parser = BrandMarkupAudit()
+    parser.feed(source)
+    if parser.active_slots or parser.active_wordmarks:
+        fail(errors, "Unclosed brand slot or wordmark element")
+    for state in parser.slots:
+        attrs = state["attrs"]
         slot = attrs.get("data-laaa-brand-slot", "").lower()
         variant = attrs.get("data-logo-variant", "").lower()
         context = attrs.get("data-brand-context", "").lower()
         seen_slots[slot] = seen_slots.get(slot, 0) + 1
-        body = match.group("body")
-        if re.search(r"<(?:svg|canvas)\b|data:image|\bstyle\s*=", body, re.IGNORECASE):
+        if state["prohibited"]:
             fail(errors, f"Brand slot {slot or '<unnamed>'} contains prohibited inline or synthesized content")
-        visible_text = html_module.unescape(re.sub(r"<[^>]+>", "", body)).strip()
+        visible_text = html_module.unescape("".join(state["text"])).strip()
         if visible_text:
             fail(errors, f"Brand slot {slot or '<unnamed>'} contains styled text")
-        images = re.findall(r"<img\b([^>]*)>", body, re.IGNORECASE | re.DOTALL)
+        images = state["images"]
         if len(images) != 1:
             fail(errors, f"Brand slot {slot or '<unnamed>'} must contain exactly one image")
             continue
-        image_attrs = {key.lower(): value for key, _, value in ATTR_RE.findall(images[0])}
+        image_attrs = images[0]
         src = image_attrs.get("src", "")
         if not src:
             fail(errors, f"Brand slot {slot or '<unnamed>'} image has no src")
@@ -203,11 +271,11 @@ def audit_brand_slots(source: str, entrypoint: Path, site: Path, manifest: dict[
         if seen_slots.get(required_slot) != 1:
             fail(errors, f"Expected exactly one {required_slot} brand slot")
 
-    for wordmark in re.finditer(r"<(?P<tag>[a-z][\w:-]*)(?P<attrs>[^>]*class\s*=\s*['\"][^'\"]*wordmark[^'\"]*['\"][^>]*)>(?P<body>.*?)</(?P=tag)\s*>", source, re.I | re.S):
-        text = html_module.unescape(re.sub(r"<[^>]+>", "", wordmark.group("body"))).strip()
+    for wordmark in parser.wordmarks:
+        text = html_module.unescape("".join(wordmark["text"])).strip()
         if re.search(r"\bLAAA\b", text, re.IGNORECASE):
             fail(errors, "Styled-text LAAA wordmark detected")
-        if "data-laaa-brand-slot" not in wordmark.group(0):
+        if not wordmark["contains_slot"]:
             fail(errors, "Wordmark container does not include an approved brand slot")
     return approved_paths
 

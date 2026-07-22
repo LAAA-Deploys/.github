@@ -68,9 +68,9 @@ try {
 
   const reversedNoindex = makeFixture('reversed-noindex', site => {
     const file = path.join(site, 'index.html');
-    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<meta name="robots" content="noindex,nofollow">', '<meta content="nofollow, noindex" name="robots">'));
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<meta name="robots" content="noindex,nofollow">', '<meta content="nofollow, noindex" name="robots"><meta name="robots" content="max-image-preview:large">'));
   });
-  expect('attribute-order-independent noindex', runStatic(reversedNoindex), true);
+  expect('order-independent cumulative noindex', runStatic(reversedNoindex), true);
 
   const sameElementSlot = makeFixture('same-element-brand-slot', site => {
     const file = path.join(site, 'index.html');
@@ -96,6 +96,12 @@ try {
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<span data-laaa-brand-slot="header" data-logo-variant="blue" data-brand-context="light"><img src="brand/LAAA_Team_Blue.png" alt="LAAA Team"></span>', '<span data-laaa-brand-slot="header" data-logo-variant="blue" data-brand-context="light"><b style="font-family:serif">LAAA</b></span>'));
   });
   expect('styled-text wordmark', runStatic(styled), false);
+
+  const nestedSlotBypass = makeFixture('nested-slot-bypass', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<img src="brand/LAAA_Team_Blue.png" alt="LAAA Team">', '<span><img src="brand/LAAA_Team_Blue.png" alt="LAAA Team"></span><svg aria-hidden="true"></svg>'));
+  });
+  expect('nested brand-slot bypass', runStatic(nestedSlotBypass), false);
 
   const missing = makeFixture('missing-asset', site => {
     const file = path.join(site, 'index.html');
@@ -138,4 +144,4 @@ if (failures.length) {
   failures.forEach(failure => console.error(failure));
   process.exit(1);
 }
-console.log('CANARY SUITE PASSED (clean control + eight expected failures)');
+console.log('CANARY SUITE PASSED (clean control + nine expected failures)');
