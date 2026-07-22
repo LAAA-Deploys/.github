@@ -72,6 +72,12 @@ try {
   });
   expect('order-independent cumulative noindex', runStatic(reversedNoindex), true);
 
+  const httpEquivNoindex = makeFixture('http-equiv-noindex', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('name="robots"', 'http-equiv="robots"'));
+  });
+  expect('http-equiv noindex', runStatic(httpEquivNoindex), true);
+
   const sameElementSlot = makeFixture('same-element-brand-slot', site => {
     const file = path.join(site, 'index.html');
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('class="wordmark"', '').replace('<span data-laaa-brand-slot="header"', '<span class="wordmark" data-laaa-brand-slot="header"'));
@@ -103,6 +109,12 @@ try {
   });
   expect('nested brand-slot bypass', runStatic(nestedSlotBypass), false);
 
+  const embeddedSlotBypass = makeFixture('embedded-slot-bypass', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<img src="brand/LAAA_Team_Blue.png" alt="LAAA Team">', '<img src="brand/LAAA_Team_Blue.png" alt="LAAA Team"><object data="brand/LAAA_Team_White.png"></object>'));
+  });
+  expect('embedded brand-slot bypass', runStatic(embeddedSlotBypass), false);
+
   const missing = makeFixture('missing-asset', site => {
     const file = path.join(site, 'index.html');
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('</main>', '<img src="missing.jpg" alt="Missing canary"></main>'));
@@ -114,11 +126,28 @@ try {
   });
   expect('extra HTML route', runStatic(extraHtml), false);
 
+  const extraXhtml = makeFixture('extra-xhtml-route', site => {
+    fs.writeFileSync(path.join(site, 'bypass.xhtml'), '<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Bypass</h1></body></html>');
+  });
+  expect('extra XHTML route', runStatic(extraXhtml), false);
+
   const outbound = makeFixture('outbound-request', site => {
     const file = path.join(site, 'index.html');
     fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('</main>', '<img src="https://example.invalid/external.png" alt="Outbound canary"></main>'));
   });
   expect('outbound browser request', runBrowser(outbound), false);
+
+  const missingCssAsset = makeFixture('missing-css-asset', site => {
+    fs.appendFileSync(path.join(site, 'styles.css'), 'body{background-image:url(missing-background.png)}');
+  });
+  expect('missing CSS asset response', runBrowser(missingCssAsset), false);
+
+  const missingHeroHook = makeFixture('missing-hero-hook', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(' data-laaa-hero-kpis', ''));
+  });
+  expect('missing hero KPI hook static', runStatic(missingHeroHook), false);
+  expect('missing hero KPI hook browser', runBrowser(missingHeroHook), false);
 
   const collision = makeFixture('hero-collision', site => {
     fs.appendFileSync(path.join(site, 'styles.css'), '@media(max-width:620px){.hero{position:relative}.hero>[data-laaa-hero-kpis]{position:absolute;left:20px;right:20px;bottom:40px}.hero>[data-laaa-hero-content]{padding-bottom:60px}}');
@@ -144,4 +173,4 @@ if (failures.length) {
   failures.forEach(failure => console.error(failure));
   process.exit(1);
 }
-console.log('CANARY SUITE PASSED (clean control + nine expected failures)');
+console.log('CANARY SUITE PASSED (clean controls + fourteen expected failures)');

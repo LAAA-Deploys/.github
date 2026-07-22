@@ -56,6 +56,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   const page = await context.newPage();
   const runtimeErrors = [];
   const blockedExternalRequests = [];
+  const httpErrors = [];
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin === new URL(baseUrl).origin) route.continue();
@@ -66,6 +67,9 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   });
   page.on('console', message => { if (message.type() === 'error') runtimeErrors.push(`console: ${message.text()}`); });
   page.on('pageerror', error => runtimeErrors.push(`pageerror: ${error.message}`));
+  page.on('response', response => {
+    if (response.status() >= 400 && new URL(response.url()).origin === new URL(baseUrl).origin) httpErrors.push(`${response.status()} ${response.url()}`);
+  });
   page.on('requestfailed', request => {
     if (!blockedExternalRequests.includes(request.url())) runtimeErrors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText || ''}`);
   });
@@ -177,6 +181,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
       controls,
       clipped,
       heroCollision,
+      heroHooks: { content: Boolean(heroContent), kpis: Boolean(heroKpis) },
       tables,
       contrastFailures,
       images,
@@ -185,6 +190,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   });
 
   check(audit.overflow <= 1, `${key}: document-level horizontal overflow ${audit.overflow}px`);
+  check(audit.heroHooks.content && audit.heroHooks.kpis, `${key}: standardized hero content/KPI hooks are missing`);
   check(audit.heroCollision <= 1, `${key}: hero content collides with KPI strip`);
   audit.controls.forEach(control => check(control.width >= 44 && control.height >= 44, `${key}: control below 44px "${control.name}" ${control.width.toFixed(1)}x${control.height.toFixed(1)}`));
   check(audit.clipped.length === 0, `${key}: clipped text ${audit.clipped.join(', ')}`);
@@ -198,6 +204,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   check(audit.contrastFailures.length === 0, `${key}: WCAG AA contrast failures ${audit.contrastFailures.join(', ')}`);
   check(audit.activeExternalScripts.length === 0, `${key}: external scripts are not permitted: ${audit.activeExternalScripts.join(', ')}`);
   check(blockedExternalRequests.length === 0, `${key}: outbound browser requests are not permitted: ${[...new Set(blockedExternalRequests)].join(', ')}`);
+  check(httpErrors.length === 0, `${key}: local HTTP asset errors ${[...new Set(httpErrors)].join(', ')}`);
   check(runtimeErrors.length === 0, `${key}: runtime errors ${runtimeErrors.join('; ')}`);
 
   if (options.menuTest) {

@@ -42,10 +42,8 @@ if (-not $Apply) {
     exit 0
 }
 
-$propertyPayload = @{
-    properties = @(@{ property_name = 'laaa-deliverable'; value = $Deliverable })
-} | ConvertTo-Json -Compress -Depth 4
-$propertyPayload | gh api "repos/$Repository/properties/values" --method PATCH --input - --header "X-GitHub-Api-Version: $apiVersion" | Out-Null
+$branch = gh api "repos/$Repository/branches/$DefaultBranch" --header "X-GitHub-Api-Version: $apiVersion" | ConvertFrom-Json
+if (-not $branch) { throw "Default branch candidate does not exist: $Repository@$DefaultBranch" }
 
 gh api "repos/$Repository" --method PATCH -f "default_branch=$DefaultBranch" --header "X-GitHub-Api-Version: $apiVersion" | Out-Null
 
@@ -55,9 +53,17 @@ if ($LASTEXITCODE -ne 0) { $pagesExists = $false }
 $pagesMethod = if ($pagesExists) { 'PUT' } else { 'POST' }
 gh api "repos/$Repository/pages" --method $pagesMethod -f 'build_type=legacy' -f "source[branch]=$DefaultBranch" -f 'source[path]=/' --header "X-GitHub-Api-Version: $apiVersion" | Out-Null
 
-$properties = gh api "repos/$Repository/properties/values" --header "X-GitHub-Api-Version: $apiVersion" | ConvertFrom-Json
 $page = gh api "repos/$Repository/pages" --header "X-GitHub-Api-Version: $apiVersion" | ConvertFrom-Json
 $verified = gh api "repos/$Repository" --header "X-GitHub-Api-Version: $apiVersion" | ConvertFrom-Json
+if ($verified.default_branch -ne $DefaultBranch -or $page.source.branch -ne $DefaultBranch -or $page.source.path -ne '/') {
+    throw 'Default branch or Pages verification failed. The marketing property was not set, so the fleet ruleset remains inactive for this repository.'
+}
+
+$propertyPayload = @{
+    properties = @(@{ property_name = 'laaa-deliverable'; value = $Deliverable })
+} | ConvertTo-Json -Compress -Depth 4
+$propertyPayload | gh api "repos/$Repository/properties/values" --method PATCH --input - --header "X-GitHub-Api-Version: $apiVersion" | Out-Null
+$properties = gh api "repos/$Repository/properties/values" --header "X-GitHub-Api-Version: $apiVersion" | ConvertFrom-Json
 
 [ordered]@{
     repository = $Repository

@@ -16,6 +16,8 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 LOGO_LIKE = re.compile(r"(?:laaa|logo|brand)", re.IGNORECASE)
 UNRESOLVED = re.compile(r"{{|}}|\bTODO\b|\bPLACEHOLDER\b", re.IGNORECASE)
 VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+PROHIBITED_BRAND_ELEMENTS = {"canvas", "embed", "iframe", "object", "picture", "source", "svg", "video"}
+HTML_EXTENSIONS = {".htm", ".html", ".shtml", ".xht", ".xhtml"}
 
 
 class DocumentAudit(HTMLParser):
@@ -28,6 +30,7 @@ class DocumentAudit(HTMLParser):
         self.fragments: list[str] = []
         self.image_errors: list[str] = []
         self.has_noindex = False
+        self.hero_hooks = {"data-laaa-hero-content": 0, "data-laaa-hero-kpis": 0}
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         attrs = {key.lower(): value or "" for key, value in attrs_list}
@@ -38,7 +41,10 @@ class DocumentAudit(HTMLParser):
             self.landmarks[tag] += 1
         if attrs.get("id"):
             self.ids.add(attrs["id"])
-        if tag == "meta" and attrs.get("name", "").lower() == "robots":
+        for hook in self.hero_hooks:
+            if hook in attrs:
+                self.hero_hooks[hook] += 1
+        if tag == "meta" and "robots" in {attrs.get("name", "").lower(), attrs.get("http-equiv", "").lower()}:
             directives = {item.strip().lower() for item in attrs.get("content", "").split(",")}
             self.has_noindex = self.has_noindex or "noindex" in directives
         if tag == "img":
@@ -94,7 +100,7 @@ class BrandMarkupAudit(HTMLParser):
             })
         for slot in self.active_slots:
             prohibited = slot["prohibited"]
-            if tag in {"svg", "canvas"}:
+            if tag in PROHIBITED_BRAND_ELEMENTS:
                 prohibited.append(tag)
             if "style" in attrs:
                 prohibited.append("style")
@@ -306,7 +312,7 @@ def main() -> int:
         source = ""
     else:
         source = entrypoint.read_text(encoding="utf-8", errors="strict")
-    html_files = sorted(path.resolve() for path in site.rglob("*") if path.is_file() and path.suffix.lower() in {".html", ".htm"})
+    html_files = sorted(path.resolve() for path in site.rglob("*") if path.is_file() and path.suffix.lower() in HTML_EXTENSIONS)
     for extra_html in html_files:
         if extra_html != entrypoint.resolve():
             fail(errors, f"Additional HTML route is not permitted by the single-page contract: {extra_html.relative_to(site).as_posix()}")
@@ -319,6 +325,9 @@ def main() -> int:
     for landmark, count in audit.landmarks.items():
         if count < 1:
             fail(errors, f"Missing {landmark} landmark")
+    for hook, count in audit.hero_hooks.items():
+        if count != 1:
+            fail(errors, f"Expected exactly one {hook}; found {count}")
     for message in audit.image_errors:
         fail(errors, message)
     for fragment in audit.fragments:
