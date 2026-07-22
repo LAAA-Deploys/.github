@@ -45,10 +45,46 @@ function expect(name, result, shouldPass) {
   else console.log(`${name}: ${passed ? 'PASS' : 'EXPECTED FAILURE'}`);
 }
 
+function moveToNestedEntrypoint(site) {
+  const nested = path.join(site, 'dist');
+  fs.mkdirSync(nested);
+  for (const name of ['index.html', 'styles.css', 'site.js', 'brand']) {
+    fs.renameSync(path.join(site, name), path.join(nested, name));
+  }
+  fs.writeFileSync(path.join(site, '.laaa-marketing.json'), JSON.stringify({ schemaVersion: 1, deliverable: 'om', entrypoint: 'dist/index.html', requireNoindex: true }, null, 2));
+}
+
 try {
   const clean = makeFixture('clean');
   expect('clean static', runStatic(clean), true);
   expect('clean browser', runBrowser(clean), true);
+
+  const rootRelative = makeFixture('root-relative-assets', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replaceAll('src="brand/', 'src="/brand/').replace('href="styles.css"', 'href="/styles.css"').replace('src="site.js"', 'src="/site.js"'));
+  });
+  expect('root-relative assets static', runStatic(rootRelative), true);
+  expect('root-relative assets browser', runBrowser(rootRelative), true);
+
+  const reversedNoindex = makeFixture('reversed-noindex', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<meta name="robots" content="noindex,nofollow">', '<meta content="nofollow, noindex" name="robots">'));
+  });
+  expect('attribute-order-independent noindex', runStatic(reversedNoindex), true);
+
+  const sameElementSlot = makeFixture('same-element-brand-slot', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('class="wordmark"', '').replace('<span data-laaa-brand-slot="header"', '<span class="wordmark" data-laaa-brand-slot="header"'));
+  });
+  expect('same-element wordmark slot', runStatic(sameElementSlot), true);
+
+  const nestedEntrypoint = makeFixture('nested-entrypoint', moveToNestedEntrypoint);
+  expect('nested entrypoint static', runStatic(nestedEntrypoint), true);
+  expect('nested entrypoint browser', runBrowser(nestedEntrypoint), true);
+
+  const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'laaa-marketing-quality.yml'), 'utf8');
+  if (!/^\s{2}pull_request:\s*$/m.test(workflow) || !/^\s{2}merge_group:\s*$/m.test(workflow)) failures.push('ruleset workflow: missing supported pull_request/merge_group triggers');
+  else console.log('ruleset workflow triggers: PASS');
 
   const altered = makeFixture('altered-logo', site => {
     fs.appendFileSync(path.join(site, 'brand', 'LAAA_Team_Blue.png'), Buffer.from([0]));

@@ -14,6 +14,7 @@ const outputDir = path.resolve(argument('--output', path.join(process.cwd(), 'qu
 const quick = process.argv.includes('--quick');
 const contract = JSON.parse(fs.readFileSync(path.join(siteRoot, '.laaa-marketing.json'), 'utf8'));
 const entrypoint = contract.entrypoint || 'index.html';
+const entrypointUrl = '/' + entrypoint.split(path.sep).join('/').replace(/^\/+/, '');
 const failures = [];
 const results = [];
 
@@ -50,6 +51,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
     forcedColors: options.forcedColors || 'none',
     isMobile: Boolean(options.isMobile),
     hasTouch: Boolean(options.hasTouch),
+    serviceWorkers: 'block',
   });
   const page = await context.newPage();
   const runtimeErrors = [];
@@ -218,7 +220,7 @@ async function main() {
   if (!fs.existsSync(path.join(siteRoot, '.laaa-marketing.json'))) throw new Error(`Missing ${path.join(siteRoot, '.laaa-marketing.json')}`);
   const server = createServer();
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-  const baseUrl = `http://127.0.0.1:${server.address().port}/`;
+  const baseUrl = `http://127.0.0.1:${server.address().port}${entrypointUrl}`;
   try {
     const chrome = await chromium.launch({ headless: true });
     const matrix = quick ? [[320,850],[390,844]] : [[320,850],[360,800],[390,844],[428,926],[768,1024],[844,390],[900,900],[901,900],[1440,900],[720,900]];

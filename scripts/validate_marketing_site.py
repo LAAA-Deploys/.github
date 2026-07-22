@@ -32,6 +32,7 @@ class DocumentAudit(HTMLParser):
         self.references: list[tuple[str, str]] = []
         self.fragments: list[str] = []
         self.image_errors: list[str] = []
+        self.has_noindex = False
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         attrs = {key.lower(): value or "" for key, value in attrs_list}
@@ -42,6 +43,9 @@ class DocumentAudit(HTMLParser):
             self.landmarks[tag] += 1
         if attrs.get("id"):
             self.ids.add(attrs["id"])
+        if tag == "meta" and attrs.get("name", "").lower() == "robots":
+            directives = {item.strip().lower() for item in attrs.get("content", "").split(",")}
+            self.has_noindex = "noindex" in directives
         if tag == "img":
             if not attrs.get("alt", "").strip():
                 self.image_errors.append(f"Image is missing non-empty alt text: {attrs.get('src', '<no src>')}")
@@ -90,6 +94,8 @@ def local_reference_path(entrypoint: Path, root: Path, reference: str) -> Path |
     raw_path = unquote(parts.path)
     if not raw_path:
         return None
+    if raw_path.startswith("/"):
+        return safe_child(root, raw_path.lstrip("/"))
     return safe_child(root, str(entrypoint.parent.relative_to(root) / raw_path))
 
 
@@ -197,11 +203,11 @@ def audit_brand_slots(source: str, entrypoint: Path, site: Path, manifest: dict[
         if seen_slots.get(required_slot) != 1:
             fail(errors, f"Expected exactly one {required_slot} brand slot")
 
-    for wordmark in re.finditer(r"<(?P<tag>[a-z][\w:-]*)[^>]*class\s*=\s*['\"][^'\"]*wordmark[^'\"]*['\"][^>]*>(?P<body>.*?)</(?P=tag)\s*>", source, re.I | re.S):
+    for wordmark in re.finditer(r"<(?P<tag>[a-z][\w:-]*)(?P<attrs>[^>]*class\s*=\s*['\"][^'\"]*wordmark[^'\"]*['\"][^>]*)>(?P<body>.*?)</(?P=tag)\s*>", source, re.I | re.S):
         text = html_module.unescape(re.sub(r"<[^>]+>", "", wordmark.group("body"))).strip()
         if re.search(r"\bLAAA\b", text, re.IGNORECASE):
             fail(errors, "Styled-text LAAA wordmark detected")
-        if "data-laaa-brand-slot" not in wordmark.group("body"):
+        if "data-laaa-brand-slot" not in wordmark.group(0):
             fail(errors, "Wordmark container does not include an approved brand slot")
     return approved_paths
 
@@ -256,7 +262,7 @@ def main() -> int:
             fail(errors, f"Missing local {tag} asset: {reference}")
     if UNRESOLVED.search(source):
         fail(errors, "Unresolved template or placeholder marker detected")
-    if contract.get("requireNoindex") and not re.search(r'<meta\b[^>]*name\s*=\s*["\']robots["\'][^>]*content\s*=\s*["\'][^"\']*noindex', source, re.I):
+    if contract.get("requireNoindex") and not audit.has_noindex:
         fail(errors, "Required noindex robots meta is missing")
 
     approved_paths = audit_brand_slots(source, entrypoint, site, manifest, errors)
