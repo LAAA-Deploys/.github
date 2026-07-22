@@ -84,9 +84,21 @@ try {
   });
   expect('same-element wordmark slot', runStatic(sameElementSlot), true);
 
+  const unrelatedWordmarkSubstring = makeFixture('unrelated-wordmark-substring', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('<main id="overview">', '<main id="overview"><p class="swordmark">Ordinary prose</p>'));
+  });
+  expect('unrelated wordmark substring', runStatic(unrelatedWordmarkSubstring), true);
+
   const nestedEntrypoint = makeFixture('nested-entrypoint', moveToNestedEntrypoint);
   expect('nested entrypoint static', runStatic(nestedEntrypoint), true);
   expect('nested entrypoint browser', runBrowser(nestedEntrypoint), true);
+
+  const leadingSlashEntrypoint = makeFixture('leading-slash-entrypoint', site => {
+    fs.writeFileSync(path.join(site, '.laaa-marketing.json'), JSON.stringify({ schemaVersion: 1, deliverable: 'om', entrypoint: '/index.html', requireNoindex: true }, null, 2));
+  });
+  expect('leading slash entrypoint static', runStatic(leadingSlashEntrypoint), false);
+  expect('leading slash entrypoint browser', runBrowser(leadingSlashEntrypoint), false);
 
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'laaa-marketing-quality.yml'), 'utf8');
   if (!/^\s{2}pull_request:\s*$/m.test(workflow) || !/^\s{2}merge_group:\s*$/m.test(workflow)) failures.push('ruleset workflow: missing supported pull_request/merge_group triggers');
@@ -96,6 +108,21 @@ try {
     fs.appendFileSync(path.join(site, 'brand', 'LAAA_Team_Blue.png'), Buffer.from([0]));
   });
   expect('altered logo', runStatic(altered), false);
+
+  const outsideSlotLogo = makeFixture('outside-slot-logo', site => {
+    const disguised = path.join(site, 'brand', 'mark.png');
+    fs.copyFileSync(path.join(root, 'branding', 'logos', 'LAAA_Team_Blue.png'), disguised);
+    fs.appendFileSync(disguised, Buffer.from([0]));
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('</main>', '<img src="brand/mark.png" alt="Graphic"></main>'));
+  });
+  expect('disguised logo outside slot', runStatic(outsideSlotLogo), false);
+
+  const slotSrcset = makeFixture('brand-slot-srcset', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('src="brand/LAAA_Team_Blue.png" alt="LAAA Team"', 'src="brand/LAAA_Team_Blue.png" srcset="brand/LAAA_Team_White.png 2x" alt="LAAA Team"'));
+  });
+  expect('brand slot srcset', runStatic(slotSrcset), false);
 
   const styled = makeFixture('styled-wordmark', site => {
     const file = path.join(site, 'index.html');
@@ -173,4 +200,4 @@ if (failures.length) {
   failures.forEach(failure => console.error(failure));
   process.exit(1);
 }
-console.log('CANARY SUITE PASSED (clean controls + fourteen expected failures)');
+console.log('CANARY SUITE PASSED (clean controls + eighteen expected failures)');

@@ -13,6 +13,8 @@ Each site includes `.laaa-marketing.json` with a versioned declarative contract:
 }
 ```
 
+`entrypoint` is a non-empty relative POSIX path such as `index.html` or `dist/index.html`. Leading slashes, backslashes, query strings, and fragments are invalid so the static and browser audits always inspect the same file.
+
 The rendered entrypoint must include:
 
 - One `h1`, `main`, navigation, and footer landmarks.
@@ -21,4 +23,4 @@ The rendered entrypoint must include:
 - `data-laaa-menu-toggle`, `data-laaa-menu-label`, and `data-laaa-menu` on mobile-navigation controls.
 - A keyboard-focusable region and a visible `data-laaa-scroll-cue` for every horizontally overflowing data table.
 
-The brand slots may not contain inline SVG, canvas, base64 images, styled text, or altered/unknown logo files. Ordinary prose references to “LAAA Team” remain allowed outside a wordmark or brand slot.
+The brand slots may not contain inline SVG, canvas, base64 images, `srcset`, styled text, or altered/unknown logo files. Logo-like images outside approved brand slots are rejected using markup semantics, manifest identity, and canonical raster dimensions. Ordinary prose references to “LAAA Team” remain allowed outside a wordmark or brand slot.

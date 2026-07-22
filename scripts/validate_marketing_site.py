@@ -13,7 +13,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
-LOGO_LIKE = re.compile(r"(?:laaa|logo|brand)", re.IGNORECASE)
+LOGO_LIKE = re.compile(r"(?:laaa|logo|brand|wordmark|marcus[\s_-]*millichap)", re.IGNORECASE)
 UNRESOLVED = re.compile(r"{{|}}|\bTODO\b|\bPLACEHOLDER\b", re.IGNORECASE)
 VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 PROHIBITED_BRAND_ELEMENTS = {"canvas", "embed", "iframe", "object", "picture", "source", "svg", "video"}
@@ -77,6 +77,7 @@ class BrandMarkupAudit(HTMLParser):
         self.active_wordmarks: list[dict[str, object]] = []
         self.slots: list[dict[str, object]] = []
         self.wordmarks: list[dict[str, object]] = []
+        self.images: list[dict[str, object]] = []
 
     def handle_starttag(self, tag: str, attrs_list: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
@@ -91,7 +92,7 @@ class BrandMarkupAudit(HTMLParser):
                 "text": [],
             })
         classes = attrs.get("class", "").lower().split()
-        if any("wordmark" in class_name for class_name in classes):
+        if any(class_name == "wordmark" or class_name.startswith("wordmark-") or class_name.endswith("-wordmark") for class_name in classes):
             self.active_wordmarks.append({
                 "tag": tag,
                 "depth": self.depth,
@@ -108,6 +109,8 @@ class BrandMarkupAudit(HTMLParser):
                 prohibited.append("data:image")
             if tag == "img":
                 slot["images"].append(attrs)
+        if tag == "img":
+            self.images.append({"attrs": attrs, "inside_slot": bool(self.active_slots)})
         if "data-laaa-brand-slot" in attrs:
             for wordmark in self.active_wordmarks:
                 wordmark["contains_slot"] = True
@@ -188,6 +191,13 @@ def load_contract(site: Path, errors: list[str]) -> dict[str, object]:
     unknown = sorted(set(contract) - allowed_keys)
     if unknown:
         fail(errors, f"Unknown site-contract fields: {', '.join(unknown)}")
+    entrypoint = contract.get("entrypoint")
+    if not isinstance(entrypoint, str) or not entrypoint.strip():
+        fail(errors, "entrypoint must be a non-empty relative POSIX path")
+        contract["entrypoint"] = "index.html"
+    elif entrypoint != entrypoint.strip() or entrypoint.startswith(("/", "\\")) or "\\" in entrypoint or urlsplit(entrypoint).query or urlsplit(entrypoint).fragment:
+        fail(errors, "entrypoint must be a relative POSIX path without a leading slash, query, or fragment")
+        contract["entrypoint"] = "index.html"
     return contract
 
 
@@ -238,6 +248,8 @@ def audit_brand_slots(source: str, entrypoint: Path, site: Path, manifest: dict[
             continue
         image_attrs = images[0]
         src = image_attrs.get("src", "")
+        if image_attrs.get("srcset", "").strip():
+            fail(errors, f"Brand slot {slot or '<unnamed>'} image must not use srcset")
         if not src:
             fail(errors, f"Brand slot {slot or '<unnamed>'} image has no src")
             continue
@@ -283,6 +295,33 @@ def audit_brand_slots(source: str, entrypoint: Path, site: Path, manifest: dict[
             fail(errors, "Styled-text LAAA wordmark detected")
         if not wordmark["contains_slot"]:
             fail(errors, "Wordmark container does not include an approved brand slot")
+
+    approved_dimensions = {
+        (dimensions["width"], dimensions["height"])
+        for asset in manifest.values()
+        if (dimensions := asset.get("rasterDimensions"))
+    }
+    for image in parser.images:
+        if image["inside_slot"]:
+            continue
+        attrs = image["attrs"]
+        src = attrs.get("src", "")
+        semantic_text = " ".join(str(attrs.get(key, "")) for key in ("src", "alt", "class", "id", "title", "aria-label"))
+        logo_like = bool(LOGO_LIKE.search(semantic_text))
+        try:
+            image_path = local_reference_path(entrypoint, site, src) if src else None
+        except ValueError as exc:
+            fail(errors, str(exc))
+            continue
+        if image_path is not None and image_path.name in manifest:
+            logo_like = True
+        if image_path is not None and image_path.is_file() and image_path.suffix.lower() == ".png":
+            try:
+                logo_like = logo_like or png_dimensions(image_path) in approved_dimensions
+            except ValueError:
+                pass
+        if logo_like:
+            fail(errors, f"Logo-like image must be inside an approved brand slot: {src or '<no src>'}")
     return approved_paths
 
 
