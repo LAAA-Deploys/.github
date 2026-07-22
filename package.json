@@ -1,0 +1,13 @@
+{
+  "name": "laaa-marketing-governance",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Trusted static-site quality harness for LAAA marketing repositories",
+  "scripts": {
+    "test:browser": "node scripts/run_browser_checks.cjs",
+    "test:canaries": "node tests/run_canaries.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

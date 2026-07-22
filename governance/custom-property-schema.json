@@ -1,0 +1,14 @@
+{
+  "properties": [
+    {
+      "property_name": "laaa-deliverable",
+      "value_type": "single_select",
+      "required": true,
+      "default_value": "none",
+      "description": "LAAA marketing-governance classification",
+      "allowed_values": ["none", "bov", "om", "marketing"],
+      "values_editable_by": "org_actors",
+      "require_explicit_values": true
+    }
+  ]
+}

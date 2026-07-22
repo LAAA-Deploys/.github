@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "laaa-team-black-png",
+      "filename": "LAAA_Team_Black.png",
+      "format": "png",
+      "bytes": 30801,
+      "sha256": "53A825AB6272D145E2B2C3959FE0DA7A3D27FBF3059E9E53AEC8AD81F4E861C5",
+      "rasterDimensions": { "width": 1650, "height": 600 },
+      "allowedContexts": ["web-monochrome-light", "print-monochrome-light"]
+    },
+    {
+      "id": "laaa-team-blue-png",
+      "filename": "LAAA_Team_Blue.png",
+      "format": "png",
+      "bytes": 31373,
+      "sha256": "EBCED402DEE39F41C25DA2B2CF7124D1932A45DF95754675CC79E4658BF9A6D2",
+      "rasterDimensions": { "width": 1651, "height": 600 },
+      "allowedContexts": ["web-light", "print-light"]
+    },
+    {
+      "id": "laaa-team-white-png",
+      "filename": "LAAA_Team_White.png",
+      "format": "png",
+      "bytes": 28342,
+      "sha256": "40439C1B03B8132B2E09832258CA22BC04B0F18F3796537C43F45F0FEF68E2F5",
+      "rasterDimensions": { "width": 1651, "height": 600 },
+      "allowedContexts": ["web-dark", "print-dark"]
+    },
+    {
+      "id": "laaa-team-black-eps",
+      "filename": "LAAA_Team_Black.eps",
+      "format": "eps",
+      "bytes": 719746,
+      "sha256": "EFB322D72DF5A4F4761148FFDF461970D7D2978AC4E820193FBD0C6ECD9B89D0",
+      "allowedContexts": ["print-monochrome-light"]
+    },
+    {
+      "id": "laaa-team-blue-eps",
+      "filename": "LAAA_Team_Blue.eps",
+      "format": "eps",
+      "bytes": 719506,
+      "sha256": "CA8140ED85864C30EA8C46D5C65F057F8653EE5A84E4F24F26902447F81636DA",
+      "allowedContexts": ["print-light"]
+    },
+    {
+      "id": "laaa-team-white-eps",
+      "filename": "LAAA_Team_White.eps",
+      "format": "eps",
+      "bytes": 719598,
+      "sha256": "0FC406574C5E6A16EC35550C8D7F88E7E3E98759E22ACCA93F3AE54975869509",
+      "allowedContexts": ["print-dark"]
+    }
+  ]
+}

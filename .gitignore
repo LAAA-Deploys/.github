@@ -1,0 +1,4 @@
+node_modules/
+quality-artifacts/
+__pycache__/
+*.pyc

@@ -1,0 +1,54 @@
+name: LAAA Marketing Quality
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  laaa-marketing-quality:
+    name: laaa-marketing-quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out resulting marketing tree
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: site
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check out trusted governance harness
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: LAAA-Deploys/.github
+          ref: master
+          path: governance
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Install trusted browser dependencies
+        working-directory: governance
+        run: |
+          npm ci --ignore-scripts
+          npx playwright install --with-deps chromium webkit
+
+      - name: Validate full static tree and approved brand bytes
+        run: python governance/scripts/validate_marketing_site.py --site site --manifest governance/branding/logo_manifest.json
+
+      - name: Run blocked-network browser matrix
+        run: node governance/scripts/run_browser_checks.cjs --site site --output quality-artifacts
+
+      - name: Prove clean and failure canaries
+        working-directory: governance
+        run: node tests/run_canaries.cjs
+
+      - name: Upload review artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: laaa-marketing-quality-${{ github.sha }}
+          path: quality-artifacts
+          if-no-files-found: warn
+          retention-days: 14
