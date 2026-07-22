@@ -14,6 +14,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out resulting marketing tree
+        if: github.repository != 'LAAA-Deploys/.github'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           path: site
@@ -21,10 +22,19 @@ jobs:
           fetch-depth: 1
 
       - name: Check out trusted governance harness
+        if: github.repository != 'LAAA-Deploys/.github'
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: LAAA-Deploys/.github
           ref: master
+          path: governance
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Check out governance candidate for self-test
+        if: github.repository == 'LAAA-Deploys/.github'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
           path: governance
           persist-credentials: false
           fetch-depth: 1
@@ -36,10 +46,19 @@ jobs:
           npx playwright install --with-deps chromium webkit
 
       - name: Validate full static tree and approved brand bytes
+        if: github.repository != 'LAAA-Deploys/.github'
         run: python governance/scripts/validate_marketing_site.py --site site --manifest governance/branding/logo_manifest.json
 
       - name: Run blocked-network browser matrix
+        if: github.repository != 'LAAA-Deploys/.github'
         run: node governance/scripts/run_browser_checks.cjs --site site --output quality-artifacts
+
+      - name: Validate governance harness syntax
+        if: github.repository == 'LAAA-Deploys/.github'
+        run: |
+          python -m py_compile governance/scripts/validate_marketing_site.py
+          node --check governance/scripts/run_browser_checks.cjs
+          node --check governance/tests/run_canaries.cjs
 
       - name: Prove clean and failure canaries
         working-directory: governance

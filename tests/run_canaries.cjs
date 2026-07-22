@@ -103,6 +103,17 @@ try {
   });
   expect('missing asset', runStatic(missing), false);
 
+  const extraHtml = makeFixture('extra-html-route', site => {
+    fs.writeFileSync(path.join(site, 'bypass.html'), '<!doctype html><html><body><h1>LAAA styled bypass</h1></body></html>');
+  });
+  expect('extra HTML route', runStatic(extraHtml), false);
+
+  const outbound = makeFixture('outbound-request', site => {
+    const file = path.join(site, 'index.html');
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('</main>', '<img src="https://example.invalid/external.png" alt="Outbound canary"></main>'));
+  });
+  expect('outbound browser request', runBrowser(outbound), false);
+
   const collision = makeFixture('hero-collision', site => {
     fs.appendFileSync(path.join(site, 'styles.css'), '@media(max-width:620px){.hero{position:relative}.hero>[data-laaa-hero-kpis]{position:absolute;left:20px;right:20px;bottom:40px}.hero>[data-laaa-hero-content]{padding-bottom:60px}}');
   });
@@ -127,4 +138,4 @@ if (failures.length) {
   failures.forEach(failure => console.error(failure));
   process.exit(1);
 }
-console.log('CANARY SUITE PASSED (clean control + six expected failures)');
+console.log('CANARY SUITE PASSED (clean control + eight expected failures)');

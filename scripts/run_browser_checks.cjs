@@ -55,14 +55,20 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   });
   const page = await context.newPage();
   const runtimeErrors = [];
+  const blockedExternalRequests = [];
   await page.route('**/*', route => {
     const url = new URL(route.request().url());
     if (url.origin === new URL(baseUrl).origin) route.continue();
-    else route.abort('blockedbyclient');
+    else {
+      blockedExternalRequests.push(route.request().url());
+      route.abort('blockedbyclient');
+    }
   });
   page.on('console', message => { if (message.type() === 'error') runtimeErrors.push(`console: ${message.text()}`); });
   page.on('pageerror', error => runtimeErrors.push(`pageerror: ${error.message}`));
-  page.on('requestfailed', request => runtimeErrors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText || ''}`));
+  page.on('requestfailed', request => {
+    if (!blockedExternalRequests.includes(request.url())) runtimeErrors.push(`requestfailed: ${request.url()} ${request.failure()?.errorText || ''}`);
+  });
 
   await page.goto(baseUrl, { waitUntil: 'networkidle' });
   await page.evaluate(async () => {
@@ -191,6 +197,7 @@ async function inspect(browser, baseUrl, width, height, options = {}) {
   });
   check(audit.contrastFailures.length === 0, `${key}: WCAG AA contrast failures ${audit.contrastFailures.join(', ')}`);
   check(audit.activeExternalScripts.length === 0, `${key}: external scripts are not permitted: ${audit.activeExternalScripts.join(', ')}`);
+  check(blockedExternalRequests.length === 0, `${key}: outbound browser requests are not permitted: ${[...new Set(blockedExternalRequests)].join(', ')}`);
   check(runtimeErrors.length === 0, `${key}: runtime errors ${runtimeErrors.join('; ')}`);
 
   if (options.menuTest) {

@@ -238,6 +238,10 @@ def main() -> int:
         source = ""
     else:
         source = entrypoint.read_text(encoding="utf-8", errors="strict")
+    html_files = sorted(path.resolve() for path in site.rglob("*") if path.is_file() and path.suffix.lower() in {".html", ".htm"})
+    for extra_html in html_files:
+        if extra_html != entrypoint.resolve():
+            fail(errors, f"Additional HTML route is not permitted by the single-page contract: {extra_html.relative_to(site).as_posix()}")
 
     manifest = load_manifest(args.manifest.resolve(), errors)
     audit = DocumentAudit()
