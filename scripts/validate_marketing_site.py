@@ -195,8 +195,11 @@ def load_contract(site: Path, errors: list[str]) -> dict[str, object]:
     if not isinstance(entrypoint, str) or not entrypoint.strip():
         fail(errors, "entrypoint must be a non-empty relative POSIX path")
         contract["entrypoint"] = "index.html"
-    elif entrypoint != entrypoint.strip() or entrypoint.startswith(("/", "\\")) or "\\" in entrypoint or urlsplit(entrypoint).query or urlsplit(entrypoint).fragment:
-        fail(errors, "entrypoint must be a relative POSIX path without a leading slash, query, or fragment")
+    elif (entrypoint != entrypoint.strip() or entrypoint.startswith(("/", "\\")) or "\\" in entrypoint
+          or urlsplit(entrypoint).query or urlsplit(entrypoint).fragment
+          or any(segment in {"", ".", ".."} for segment in entrypoint.split("/"))
+          or not entrypoint.lower().endswith(".html")):
+        fail(errors, "entrypoint must be a normalized relative POSIX .html path without a leading slash, traversal, query, or fragment")
         contract["entrypoint"] = "index.html"
     return contract
 
@@ -346,7 +349,7 @@ def main() -> int:
     except ValueError as exc:
         fail(errors, str(exc))
         entrypoint = site / "index.html"
-    if not entrypoint.exists():
+    if not entrypoint.is_file():
         fail(errors, f"Missing entrypoint: {entrypoint.relative_to(site)}")
         source = ""
     else:

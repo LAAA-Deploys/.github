@@ -13,7 +13,7 @@ Each site includes `.laaa-marketing.json` with a versioned declarative contract:
 }
 ```
 
-`entrypoint` is a non-empty relative POSIX path such as `index.html` or `dist/index.html`. Leading slashes, backslashes, query strings, and fragments are invalid so the static and browser audits always inspect the same file.
+`entrypoint` is a normalized relative POSIX `.html` path such as `index.html` or `dist/index.html`. Leading slashes, backslashes, empty or traversal segments, query strings, and fragments are invalid so the static and browser audits always inspect the same file.
 
 The rendered entrypoint must include:
 

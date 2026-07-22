@@ -100,6 +100,12 @@ try {
   expect('leading slash entrypoint static', runStatic(leadingSlashEntrypoint), false);
   expect('leading slash entrypoint browser', runBrowser(leadingSlashEntrypoint), false);
 
+  const traversingEntrypoint = makeFixture('traversing-entrypoint', site => {
+    fs.writeFileSync(path.join(site, '.laaa-marketing.json'), JSON.stringify({ schemaVersion: 1, deliverable: 'om', entrypoint: 'dist/../index.html', requireNoindex: true }, null, 2));
+  });
+  expect('traversing entrypoint static', runStatic(traversingEntrypoint), false);
+  expect('traversing entrypoint browser', runBrowser(traversingEntrypoint), false);
+
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'laaa-marketing-quality.yml'), 'utf8');
   if (!/^\s{2}pull_request:\s*$/m.test(workflow) || !/^\s{2}merge_group:\s*$/m.test(workflow)) failures.push('ruleset workflow: missing supported pull_request/merge_group triggers');
   else console.log('ruleset workflow triggers: PASS');
@@ -200,4 +206,4 @@ if (failures.length) {
   failures.forEach(failure => console.error(failure));
   process.exit(1);
 }
-console.log('CANARY SUITE PASSED (clean controls + eighteen expected failures)');
+console.log('CANARY SUITE PASSED (clean controls + twenty expected failures)');

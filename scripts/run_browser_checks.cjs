@@ -14,8 +14,8 @@ const outputDir = path.resolve(argument('--output', path.join(process.cwd(), 'qu
 const quick = process.argv.includes('--quick');
 const contract = JSON.parse(fs.readFileSync(path.join(siteRoot, '.laaa-marketing.json'), 'utf8'));
 const entrypoint = contract.entrypoint || 'index.html';
-if (typeof entrypoint !== 'string' || !entrypoint.trim() || entrypoint !== entrypoint.trim() || entrypoint.startsWith('/') || entrypoint.startsWith('\\') || entrypoint.includes('\\') || entrypoint.includes('?') || entrypoint.includes('#')) {
-  console.error('BROWSER QUALITY FAILED\n- entrypoint must be a relative POSIX path without a leading slash, query, or fragment');
+if (typeof entrypoint !== 'string' || !entrypoint.trim() || entrypoint !== entrypoint.trim() || entrypoint.startsWith('/') || entrypoint.startsWith('\\') || entrypoint.includes('\\') || entrypoint.includes('?') || entrypoint.includes('#') || entrypoint.split('/').some(segment => !segment || segment === '.' || segment === '..') || !entrypoint.toLowerCase().endsWith('.html')) {
+  console.error('BROWSER QUALITY FAILED\n- entrypoint must be a normalized relative POSIX .html path without a leading slash, traversal, query, or fragment');
   process.exit(1);
 }
 const entrypointUrl = '/' + entrypoint.split(path.sep).join('/').replace(/^\/+/, '');
