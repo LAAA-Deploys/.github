@@ -1,0 +1,40 @@
+# The Codex review gate (Glen, 10/26/2026): posts the commit status `codex-review` on the PR head,
+# which branch protection requires. The logic is the shared gate, LAAA-Deploys/.github codex-gate,
+# pinned below to a full commit SHA; every repo on the gate carries this same file. The rule, and how
+# a chat merges: laaa-agent-config README step 5.
+# Every trigger runs this file from the default branch, never a PR's copy, and nothing from the PR is
+# checked out or run, so a PR cannot change the code that judges it. Codex's last summary edit carries
+# its verdict (issue_comment); the PR watcher on Glen's PC dispatches a run when a review stalls.
+name: codex-review
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created, edited, deleted]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to re-evaluate
+        required: true
+permissions:
+  contents: read
+  statuses: write
+  pull-requests: read
+  issues: write
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  cancel-in-progress: true
+jobs:
+  gate:
+    # Skip comment runs that cannot change the verdict: comments on issues, and new comments from
+    # people that are not a Codex request. Edits and deletions always rerun.
+    if: >-
+      github.event_name != 'issue_comment' || (github.event.issue.pull_request && (
+        github.event.comment.user.login == 'chatgpt-codex-connector[bot]' || github.event.action != 'created' ||
+        contains(github.event.comment.body, '@codex')))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: LAAA-Deploys/.github/codex-gate@ca3372917dec0fcaff8b9cfcfc4cbe116123c83a
+        with:
+          token: ${{ github.token }}
