@@ -47,7 +47,7 @@ export function codexState(summary) {
 
 // data: { pr, issueComments, reviews, inline, statuses } as GitHub returns them.
 // Returns { result, description, action } where action is null, "retry" or "attention".
-export function evaluate({ pr, issueComments, reviews, inline, statuses, files = null, exempt = null }, now = Date.now()) {
+export function evaluate({ pr, issueComments, reviews, inline, statuses, headCommit = null, files = null, exempt = null }, now = Date.now()) {
   const head = pr.head.sha;
   // A repo may exempt one bot's generated data (buildium-assistant's daily records PRs): the PR's
   // author must be exactly that bot and every changed file must sit under one of its paths.
@@ -69,17 +69,19 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, files =
 
   const headReviewIds = new Set(reviews.filter((r) => isCodex(r.user) && r.commit_id === head).map((r) => r.id));
   // Inline findings carry their review's commit. A finding posted as a plain comment carries none, so
-  // it counts only while the summary names the head and is newer than the head (Codex P1 on .github #3).
+  // it counts only while the summary names the head and only if it is newer than the head commit
+  // (Codex findings on .github #3).
+  const headTime = t(headCommit?.commit?.committer?.date);
   const headFindings = [
     ...inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && headReviewIds.has(c.pull_request_review_id)),
-    ...issueComments.filter((c) => onHead && isCodex(c.user) && c !== summary && t(c.created_at) >= since),
+    ...issueComments.filter((c) => onHead && isCodex(c.user) && c !== summary && t(c.created_at) >= headTime),
   ].filter((c) => severity(c.body) !== null);
   const blocking = headFindings.filter((c) => Number(severity(c.body)) <= 1);
 
-  // Codex flips its summary to completed a few seconds before its findings post; a completed
-  // review that says it has findings counts once they are readable (the next comment event).
-  const completed = (onHead && status === "completed" && (state.has_any_findings === false || headFindings.length > 0)) ||
-    headFindings.length > 0;
+  // Done only when the summary says the review of the head completed. Codex flips it a few seconds
+  // before its findings post, so a completed review that says it has findings counts once they are
+  // readable; a finding alone, before the summary completes, is not a finished review.
+  const completed = onHead && status === "completed" && (state.has_any_findings === false || headFindings.length > 0);
 
   if (completed) {
     if (blocking.length) {
@@ -167,14 +169,15 @@ function client(token) {
 
 export async function gather(api, repo, n, exempt = null) {
   const pr = await api.get(`repos/${repo}/pulls/${n}`);
-  const [issueComments, reviews, inline, statuses, files] = await Promise.all([
+  const [issueComments, reviews, inline, statuses, headCommit, files] = await Promise.all([
     api.get(`repos/${repo}/issues/${n}/comments`),
     api.get(`repos/${repo}/pulls/${n}/reviews`),
     api.get(`repos/${repo}/pulls/${n}/comments`),
     api.get(`repos/${repo}/commits/${pr.head.sha}/statuses`),
+    api.get(`repos/${repo}/commits/${pr.head.sha}`),
     exempt?.author && pr.user?.login === exempt.author ? api.get(`repos/${repo}/pulls/${n}/files`) : null,
   ]);
-  return { pr, issueComments, reviews, inline, statuses, files, exempt };
+  return { pr, issueComments, reviews, inline, statuses, headCommit, files, exempt };
 }
 
 // From the workflow's inputs: EXEMPT_AUTHOR (a bot login) and EXEMPT_PATHS (comma-separated prefixes).

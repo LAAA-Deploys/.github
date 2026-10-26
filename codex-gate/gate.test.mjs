@@ -35,6 +35,18 @@ test("a review of an older commit does not count for the new head", () => {
   assert.equal(v.action, null);
 });
 
+test("a finding before the summary completes is not a finished review", () => {
+  const v = run({ issueComments: [summary("running", HEAD, null)], reviews: [review(9, HEAD)], inline: [finding(5, 9, 2)] });
+  assert.equal(v.result, "pending");
+});
+
+test("a plain-comment finding posted before the gate first looked still counts", () => {
+  const early = { id: 51, user: CODEX, created_at: ago(30), body: "**![P1 Badge](x) Real finding**" };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true), early], reviews: [], inline: [],
+    statuses: [status(3)], headCommit: { commit: { committer: { date: ago(40) } } } }, NOW);
+  assert.equal(v.result, "failure");
+});
+
 test("a P1 on the head blocks; a P2 on the head passes the gate", () => {
   let v = run({ issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)], inline: [finding(5, 9, 1)] });
   assert.equal(v.result, "failure");
