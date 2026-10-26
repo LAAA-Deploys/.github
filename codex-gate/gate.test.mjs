@@ -193,3 +193,12 @@ test("a clean summary on the head outranks a late plain-comment finding from the
     statuses: [status(3)], headCommit: { commit: { committer: { date: ago(10) } } } }, NOW);
   assert.equal(v.result, "success");
 });
+
+test("one PR's failed dispatch is logged and the sweep goes on", async () => {
+  const api = fakeApi(base([status(STALL_MS / 60000 + 1)]));
+  api.post = async (p) => { if (p.includes("/dispatches")) throw new Error("HTTP 404"); return {}; };
+  const lines = [];
+  const failed = await applySweep({ api, repo: "o/r", log: (l) => lines.push(l) });
+  assert.equal(failed, 1);
+  assert.match(lines[0], /failed: HTTP 404/);
+});

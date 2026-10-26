@@ -215,22 +215,31 @@ export async function applyEvent({ api, commentApi = null, repo, n, exempt = nul
 }
 
 // The watcher's pass over one repo: retry as a person, and wake the workflow when the verdict moved.
+// One PR's failure (a repo without the workflow yet, a GitHub error) is logged and the rest go on;
+// the return value is the number of PRs that failed.
 export async function applySweep({ api, repo, log = console.log }) {
   const open = await api.get(`repos/${repo}/pulls?state=open`);
+  let failed = 0;
   for (const p of open) {
     if (p.draft) continue;
-    const data = await gather(api, repo, p.number);
-    const head = data.pr.head.sha;
-    const latest = data.statuses.find((s) => s.context === CONTEXT);
-    // A head the workflow already passed needs nothing (a review, or a repo's exempt generated data).
-    if (latest?.state === "success") continue;
-    const v = evaluate(data);
-    if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
-    if (v.action === "attention" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
-      await api.post(`repos/${repo}/actions/workflows/codex-review.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number) } });
+    try {
+      const data = await gather(api, repo, p.number);
+      const head = data.pr.head.sha;
+      const latest = data.statuses.find((s) => s.context === CONTEXT);
+      // A head the workflow already passed needs nothing (a review, or a repo's exempt generated data).
+      if (latest?.state === "success") continue;
+      const v = evaluate(data);
+      if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
+      if (v.action === "attention" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
+        await api.post(`repos/${repo}/actions/workflows/codex-review.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number) } });
+      }
+      log(`${repo}#${p.number} ${short(head)} ${v.result}${v.action ? " +" + v.action : ""}`);
+    } catch (e) {
+      failed++;
+      log(`${repo}#${p.number} failed: ${e?.message ?? e}`);
     }
-    log(`${repo}#${p.number} ${short(head)} ${v.result}${v.action ? " +" + v.action : ""}`);
   }
+  return failed;
 }
 
 async function main() {
@@ -241,7 +250,7 @@ async function main() {
     let failed = 0;
     for (const repo of process.argv.slice(sweep + 1)) {
       try {
-        await applySweep({ api, repo });
+        failed += await applySweep({ api, repo });
       } catch (e) {
         failed++;
         console.error(`${repo}: ${e?.message ?? e}`);
