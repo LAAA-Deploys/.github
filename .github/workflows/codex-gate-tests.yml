@@ -1,0 +1,16 @@
+name: codex-gate-tests
+on:
+  pull_request:
+    paths: [codex-gate/**, .github/workflows/codex-gate-tests.yml]
+  push:
+    branches: [master]
+    paths: [codex-gate/**]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: node --test codex-gate/gate.test.mjs
