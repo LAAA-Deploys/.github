@@ -97,6 +97,9 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses }, now =
   const lastProgress = Math.max(since, retryAt, onHead ? t(summary.updated_at) : 0);
   const stalled = now - lastProgress > STALL_MS;
 
+  if (onHead && status === "completed") {
+    return { result: "pending", description: `Codex finished ${short(head)}; reading its findings.`, action: null, settling: true };
+  }
   if (!retryAt) {
     if (failedAt || stalled) {
       return { result: "pending", description: `Codex ${failedAt ? "failed" : "stalled"} on ${short(head)}; asking once more.`, action: "retry" };
@@ -166,10 +169,17 @@ const describe = (status) => (status ? `${status.state}|${status.description}` :
 
 // The workflow's run: post the status when it changed, and the tag for Glen once. The retry is the
 // watcher's (it posts as a person), unless a comment token was given to the workflow.
-export async function applyEvent({ api, commentApi = null, repo, n, log = console.log }) {
-  const data = await gather(api, repo, n);
+export async function applyEvent({ api, commentApi = null, repo, n, log = console.log, pause = 15000 }) {
+  let data = await gather(api, repo, n);
   if (data.pr.state !== "open") return;
-  const v = evaluate(data);
+  let v = evaluate(data);
+  // Codex's findings post seconds after its summary says completed, with no event of their own:
+  // look again for up to a minute rather than leave the status pending (apto-hub #328).
+  for (let i = 0; i < 4 && v.settling; i++) {
+    await new Promise((r) => setTimeout(r, pause));
+    data = await gather(api, repo, n);
+    v = evaluate(data);
+  }
   const head = data.pr.head.sha;
   const latest = data.statuses.find((s) => s.context === CONTEXT); // newest first
   if (describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
