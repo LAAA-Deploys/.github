@@ -47,8 +47,15 @@ export function codexState(summary) {
 
 // data: { pr, issueComments, reviews, inline, statuses } as GitHub returns them.
 // Returns { result, description, action } where action is null, "retry" or "attention".
-export function evaluate({ pr, issueComments, reviews, inline, statuses }, now = Date.now()) {
+export function evaluate({ pr, issueComments, reviews, inline, statuses, files = null, exempt = null }, now = Date.now()) {
   const head = pr.head.sha;
+  // A repo may exempt one bot's generated data (buildium-assistant's daily records PRs): the PR's
+  // author must be exactly that bot and every changed file must sit under one of its paths.
+  if (exempt?.author && pr.user?.login === exempt.author && Array.isArray(files) && files.length &&
+      files.every((f) => exempt.paths.some((p) => f.filename.startsWith(p)) &&
+        (!f.previous_filename || exempt.paths.some((p) => f.previous_filename.startsWith(p))))) {
+    return { result: "success", description: `Generated data from ${exempt.author}, exempt from review.`, action: null };
+  }
   const mine = statuses.filter((s) => s.context === CONTEXT);
   // The clock for this head starts when the gate first saw it (its first status on the commit).
   const since = mine.length ? Math.min(...mine.map((s) => t(s.created_at))) : now;
@@ -61,9 +68,11 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses }, now =
   const status = (state?.status ?? "").toLowerCase();
 
   const headReviewIds = new Set(reviews.filter((r) => isCodex(r.user) && r.commit_id === head).map((r) => r.id));
+  // Inline findings carry their review's commit. A finding posted as a plain comment carries none, so
+  // it counts only while the summary names the head and is newer than the head (Codex P1 on .github #3).
   const headFindings = [
     ...inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && headReviewIds.has(c.pull_request_review_id)),
-    ...issueComments.filter((c) => isCodex(c.user) && c !== summary && severity(c.body) && t(c.created_at) >= since),
+    ...issueComments.filter((c) => onHead && isCodex(c.user) && c !== summary && t(c.created_at) >= since),
   ].filter((c) => severity(c.body) !== null);
   const blocking = headFindings.filter((c) => Number(severity(c.body)) <= 1);
 
@@ -97,7 +106,8 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses }, now =
   const lastProgress = Math.max(since, retryAt, onHead ? t(summary.updated_at) : 0);
   const stalled = now - lastProgress > STALL_MS;
 
-  if (onHead && status === "completed") {
+  // Findings that never become readable fall into the stall path like any other missing review.
+  if (onHead && status === "completed" && !stalled) {
     return { result: "pending", description: `Codex finished ${short(head)}; reading its findings.`, action: null, settling: true };
   }
   if (!retryAt) {
@@ -148,36 +158,45 @@ function client(token) {
     },
     async post(path, body) {
       const res = await call(`https://api.github.com/${path}`, { method: "POST", body: JSON.stringify(body) });
-      if (!res.ok) throw new Error(`POST ${path}: HTTP ${res.status} ${await res.text()}`);
-      return res.json();
+      const text = await res.text();
+      if (!res.ok) throw new Error(`POST ${path}: HTTP ${res.status} ${text}`);
+      return text ? JSON.parse(text) : {}; // a workflow dispatch answers 204 with no body
     },
   };
 }
 
-export async function gather(api, repo, n) {
+export async function gather(api, repo, n, exempt = null) {
   const pr = await api.get(`repos/${repo}/pulls/${n}`);
-  const [issueComments, reviews, inline, statuses] = await Promise.all([
+  const [issueComments, reviews, inline, statuses, files] = await Promise.all([
     api.get(`repos/${repo}/issues/${n}/comments`),
     api.get(`repos/${repo}/pulls/${n}/reviews`),
     api.get(`repos/${repo}/pulls/${n}/comments`),
     api.get(`repos/${repo}/commits/${pr.head.sha}/statuses`),
+    exempt?.author && pr.user?.login === exempt.author ? api.get(`repos/${repo}/pulls/${n}/files`) : null,
   ]);
-  return { pr, issueComments, reviews, inline, statuses };
+  return { pr, issueComments, reviews, inline, statuses, files, exempt };
+}
+
+// From the workflow's inputs: EXEMPT_AUTHOR (a bot login) and EXEMPT_PATHS (comma-separated prefixes).
+export function exemptFromEnv(env) {
+  const author = (env.EXEMPT_AUTHOR ?? "").trim();
+  const paths = (env.EXEMPT_PATHS ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  return author && paths.length ? { author, paths } : null;
 }
 
 const describe = (status) => (status ? `${status.state}|${status.description}` : "");
 
 // The workflow's run: post the status when it changed, and the tag for Glen once. The retry is the
 // watcher's (it posts as a person), unless a comment token was given to the workflow.
-export async function applyEvent({ api, commentApi = null, repo, n, log = console.log, pause = 15000 }) {
-  let data = await gather(api, repo, n);
+export async function applyEvent({ api, commentApi = null, repo, n, exempt = null, log = console.log, pause = 15000 }) {
+  let data = await gather(api, repo, n, exempt);
   if (data.pr.state !== "open") return;
   let v = evaluate(data);
   // Codex's findings post seconds after its summary says completed, with no event of their own:
   // look again for up to a minute rather than leave the status pending (apto-hub #328).
   for (let i = 0; i < 4 && v.settling; i++) {
     await new Promise((r) => setTimeout(r, pause));
-    data = await gather(api, repo, n);
+    data = await gather(api, repo, n, exempt);
     v = evaluate(data);
   }
   const head = data.pr.head.sha;
@@ -198,10 +217,12 @@ export async function applySweep({ api, repo, log = console.log }) {
   for (const p of open) {
     if (p.draft) continue;
     const data = await gather(api, repo, p.number);
-    const v = evaluate(data);
     const head = data.pr.head.sha;
-    if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
     const latest = data.statuses.find((s) => s.context === CONTEXT);
+    // A head the workflow already passed needs nothing (a review, or a repo's exempt generated data).
+    if (latest?.state === "success") continue;
+    const v = evaluate(data);
+    if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
     if (v.action === "attention" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
       await api.post(`repos/${repo}/actions/workflows/codex-review.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number) } });
     }
@@ -231,7 +252,7 @@ async function main() {
   const n = event.pull_request?.number ?? event.issue?.number ?? event.inputs?.pr;
   if (!n) return console.log("No pull request on this event.");
   const commentApi = process.env.COMMENT_TOKEN ? client(process.env.COMMENT_TOKEN) : null;
-  await applyEvent({ api, commentApi, repo, n });
+  await applyEvent({ api, commentApi, repo, n, exempt: exemptFromEnv(process.env) });
 }
 
 if (process.argv.includes("--event") || process.argv.includes("--sweep")) {

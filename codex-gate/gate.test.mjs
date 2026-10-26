@@ -141,3 +141,36 @@ test("the watcher posts the retry and wakes the workflow, and never posts a stat
   assert.ok(paths.includes("repos/o/r/actions/workflows/codex-review.yml/dispatches"));
   assert.ok(!paths.some((p) => p.includes("/statuses/")));
 });
+
+test("a repo's exempt bot passes only when every file is under its paths", () => {
+  const exempt = { author: "app/records-bot", paths: ["records/_generated/"] };
+  const pr = { user: { login: "app/records-bot" } };
+  let v = run({ pr, statuses: [status(3)] });
+  assert.equal(v.result, "pending");
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false, ...pr }, issueComments: [], reviews: [], inline: [], statuses: [status(3)],
+    files: [{ filename: "records/_generated/a.md" }], exempt }, NOW);
+  assert.equal(v.result, "success");
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false, ...pr }, issueComments: [], reviews: [], inline: [], statuses: [status(3)],
+    files: [{ filename: "records/_generated/a.md" }, { filename: "scripts/x.py" }], exempt }, NOW);
+  assert.equal(v.result, "pending");
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false, user: { login: "someone" } }, issueComments: [], reviews: [], inline: [], statuses: [status(3)],
+    files: [{ filename: "records/_generated/a.md" }], exempt }, NOW);
+  assert.equal(v.result, "pending");
+});
+
+test("the watcher skips a head the workflow already passed", async () => {
+  const api = fakeApi(base([{ ...status(STALL_MS / 60000 + 1), state: "success", description: "ok" }]));
+  await applySweep({ api, repo: "o/r", log: () => {} });
+  assert.equal(api.posts.length, 0);
+});
+
+test("a plain-comment finding does not count for the head while the summary names an older commit", () => {
+  const late = { id: 50, user: CODEX, created_at: ago(1), body: "**![P2 Badge](x) Old head finding**" };
+  const v = run({ issueComments: [summary("completed", OLD, true), late], statuses: [status(3)] });
+  assert.equal(v.result, "pending");
+});
+
+test("a completed summary whose findings never appear enters the retry path once stalled", () => {
+  const v = run({ issueComments: [summary("completed", HEAD, true, STALL_MS / 60000 + 2)], statuses: [status(60)] });
+  assert.equal(v.action, "retry");
+});

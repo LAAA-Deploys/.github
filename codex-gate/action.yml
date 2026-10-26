@@ -8,6 +8,14 @@ inputs:
     description: Optional token for the one "@codex review" retry, when Codex ignores the workflow's own comments.
     required: false
     default: ""
+  exempt-author:
+    description: Optional bot login whose generated-data PRs pass without a review (with exempt-paths).
+    required: false
+    default: ""
+  exempt-paths:
+    description: Comma-separated path prefixes; the exempt bot's PR passes only if every changed file is under one.
+    required: false
+    default: ""
 runs:
   using: composite
   steps:
@@ -16,3 +24,5 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.token }}
         COMMENT_TOKEN: ${{ inputs.comment-token }}
+        EXEMPT_AUTHOR: ${{ inputs.exempt-author }}
+        EXEMPT_PATHS: ${{ inputs.exempt-paths }}
