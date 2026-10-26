@@ -186,3 +186,10 @@ test("a completed summary whose findings never appear enters the retry path once
   const v = run({ issueComments: [summary("completed", HEAD, true, STALL_MS / 60000 + 2)], statuses: [status(60)] });
   assert.equal(v.action, "retry");
 });
+
+test("a clean summary on the head outranks a late plain-comment finding from the previous review", () => {
+  const late = { id: 52, user: CODEX, created_at: ago(1), body: "**![P1 Badge](x) Old review finding**" };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, false), late], reviews: [], inline: [],
+    statuses: [status(3)], headCommit: { commit: { committer: { date: ago(10) } } } }, NOW);
+  assert.equal(v.result, "success");
+});

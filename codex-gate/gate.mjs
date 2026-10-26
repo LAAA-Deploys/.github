@@ -70,11 +70,11 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
   const headReviewIds = new Set(reviews.filter((r) => isCodex(r.user) && r.commit_id === head).map((r) => r.id));
   // Inline findings carry their review's commit. A finding posted as a plain comment carries none, so
   // it counts only while the summary names the head and only if it is newer than the head commit
-  // (Codex findings on .github #3).
+  // (Codex findings on .github #3). A head summary that says it found nothing outranks any such comment.
   const headTime = t(headCommit?.commit?.committer?.date);
   const headFindings = [
     ...inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && headReviewIds.has(c.pull_request_review_id)),
-    ...issueComments.filter((c) => onHead && isCodex(c.user) && c !== summary && t(c.created_at) >= headTime),
+    ...issueComments.filter((c) => onHead && state.has_any_findings !== false && isCodex(c.user) && c !== summary && t(c.created_at) >= headTime),
   ].filter((c) => severity(c.body) !== null);
   const blocking = headFindings.filter((c) => Number(severity(c.body)) <= 1);
 
