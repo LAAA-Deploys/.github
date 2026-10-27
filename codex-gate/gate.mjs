@@ -24,6 +24,8 @@
 
 export const CONTEXT = "codex-review";
 export const STALL_MS = 15 * 60 * 1000;
+// Codex posts a run's findings within seconds of marking its summary completed.
+export const SETTLE_MS = 45 * 1000;
 export const CODEX_LOGIN = "chatgpt-codex-connector[bot]";
 export const NOTIFY = "@gscher1311";
 
@@ -47,7 +49,7 @@ export function codexState(summary) {
 
 // data: { pr, issueComments, reviews, inline, statuses } as GitHub returns them.
 // Returns { result, description, action } where action is null, "retry" or "attention".
-export function evaluate({ pr, issueComments, reviews, inline, statuses, headCommit = null, files = null, exempt = null }, now = Date.now()) {
+export function evaluate({ pr, issueComments, reviews, inline, statuses, headCommit = null, threads = null, files = null, exempt = null }, now = Date.now()) {
   const head = pr.head.sha;
   // A repo may exempt one bot's generated data (buildium-assistant's daily records PRs): the PR's
   // author must be exactly that bot and every changed file must sit under one of its paths.
@@ -81,10 +83,12 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
   // Done only when the summary says the review of the head completed. Codex flips it a few seconds
   // before its findings post, so a completed review that says it has findings counts once they are
   // readable; a finding alone, before the summary completes, is not a finished review.
-  // has_any_findings counts the whole PR's history, so a clean re-review of a PR that once had
-  // findings still says true; has_unresolved_findings false is the clean signal then (#333, 10/26/2026).
+  // has_any_findings and has_unresolved_findings count the whole PR, older commits included, so a clean
+  // re-review of a PR that once had findings still says true (#333 and .github #6, 10/26/2026). A run
+  // with findings posts a review on the head within seconds; none SETTLE_MS after completion is clean.
+  const settled = onHead && now - t(summary.updated_at) > SETTLE_MS;
   const completed = onHead && status === "completed" &&
-    (state.has_any_findings === false || state.has_unresolved_findings === false || headFindings.length > 0);
+    (state.has_any_findings === false || headFindings.length > 0 || (settled && headReviewIds.size === 0));
 
   if (completed) {
     if (blocking.length) {
@@ -106,10 +110,22 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
         action: null,
       };
     }
+    // Every finding thread on the head is answered and resolved before the gate passes, so the check
+    // above sees each reply. Resolving a thread starts no workflow run (a review-comment event would run
+    // the PR's own copy of the workflow), so the PR watcher rechecks within 15 minutes, or a chat runs
+    // the workflow (Codex P2 on .github #6). threads: root comment id -> resolved.
+    const open = threads ? headFindings.filter((f) => f.pull_request_review_id && threads.get(f.id) === false) : [];
+    if (open.length) {
+      return {
+        result: "pending",
+        description: `Codex reviewed ${short(head)}; ${open.length} finding(s) to answer and resolve before it passes.`,
+        action: null,
+      };
+    }
     const n = headFindings.length;
     return {
       result: "success",
-      description: n ? `Codex reviewed ${short(head)}; ${n} finding(s): answer and resolve each thread.` : `Codex reviewed ${short(head)}, no findings.`,
+      description: n ? `Codex reviewed ${short(head)}; ${n} finding(s) answered and resolved.` : `Codex reviewed ${short(head)}, no findings.`,
       action: null,
     };
   }
@@ -173,6 +189,12 @@ function client(token) {
       }
       return out;
     },
+    async graphql(query, variables) {
+      const res = await call("https://api.github.com/graphql", { method: "POST", body: JSON.stringify({ query, variables }) });
+      const body = await res.json();
+      if (!res.ok || body.errors) throw new Error(`GraphQL: HTTP ${res.status} ${JSON.stringify(body.errors ?? body)}`);
+      return body.data;
+    },
     async post(path, body) {
       const res = await call(`https://api.github.com/${path}`, { method: "POST", body: JSON.stringify(body) });
       const text = await res.text();
@@ -192,7 +214,15 @@ export async function gather(api, repo, n, exempt = null) {
     api.get(`repos/${repo}/commits/${pr.head.sha}`),
     exempt?.author && pr.user?.login === exempt.author ? api.get(`repos/${repo}/pulls/${n}/files`) : null,
   ]);
-  return { pr, issueComments, reviews, inline, statuses, headCommit, files, exempt };
+  let threads = null;
+  if (api.graphql) {
+    const [owner, name] = repo.split("/");
+    const q = "query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){" +
+      "reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}";
+    const d = await api.graphql(q, { o: owner, n: name, p: Number(n) });
+    threads = new Map(d.repository.pullRequest.reviewThreads.nodes.map((t) => [t.comments.nodes[0]?.databaseId, t.isResolved]));
+  }
+  return { pr, issueComments, reviews, inline, statuses, headCommit, threads, files, exempt };
 }
 
 // From the workflow's inputs: EXEMPT_AUTHOR (a bot login) and EXEMPT_PATHS (comma-separated prefixes).
