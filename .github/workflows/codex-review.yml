@@ -19,7 +19,7 @@ on:
 permissions:
   contents: read
   statuses: write
-  pull-requests: read
+  pull-requests: write
   issues: write
 concurrency:
   group: codex-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
