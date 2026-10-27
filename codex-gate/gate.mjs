@@ -91,6 +91,18 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
         action: null,
       };
     }
+    // A finding Codex raised on the head commit cannot have been fixed yet: no commit came after it.
+    // A reply on its thread that says "Fixed" (other than "Fixed in PR #n", fixed elsewhere) means the
+    // fix never landed, so the gate fails until it is pushed or the reply says what really happened.
+    const claimedFixed = headFindings.filter((f) => f.pull_request_review_id && inline.some((r) =>
+      r.in_reply_to_id === f.id && !isBot(r.user) && /^\W*fixed\b/i.test((r.body ?? "").trim()) && !/\bPR #\d+/i.test(r.body ?? "")));
+    if (claimedFixed.length) {
+      return {
+        result: "failure",
+        description: `${claimedFixed.length} thread(s) on ${short(head)} say fixed, but no commit came after the finding: push the fix.`,
+        action: null,
+      };
+    }
     const n = headFindings.length;
     return {
       result: "success",
