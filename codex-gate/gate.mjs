@@ -217,10 +217,15 @@ export async function gather(api, repo, n, exempt = null) {
   let threads = null;
   if (api.graphql) {
     const [owner, name] = repo.split("/");
-    const q = "query($o:String!,$n:String!,$p:Int!){repository(owner:$o,name:$n){pullRequest(number:$p){" +
-      "reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}";
-    const d = await api.graphql(q, { o: owner, n: name, p: Number(n) });
-    threads = new Map(d.repository.pullRequest.reviewThreads.nodes.map((t) => [t.comments.nodes[0]?.databaseId, t.isResolved]));
+    const q = "query($o:String!,$n:String!,$p:Int!,$a:String){repository(owner:$o,name:$n){pullRequest(number:$p){" +
+      "reviewThreads(first:100,after:$a){pageInfo{hasNextPage endCursor} nodes{isResolved comments(first:1){nodes{databaseId}}}}}}}";
+    threads = new Map();
+    for (let after = null; ;) {
+      const page = (await api.graphql(q, { o: owner, n: name, p: Number(n), a: after })).repository.pullRequest.reviewThreads;
+      for (const t of page.nodes) threads.set(t.comments.nodes[0]?.databaseId, t.isResolved);
+      if (!page.pageInfo.hasNextPage) break;
+      after = page.pageInfo.endCursor;
+    }
   }
   return { pr, issueComments, reviews, inline, statuses, headCommit, threads, files, exempt };
 }
