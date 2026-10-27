@@ -245,3 +245,12 @@ test("right after completion with findings flagged, the gate waits for the revie
   assert.equal(v.result, "pending");
   assert.equal(v.settling, true);
 });
+
+test("a clean head still waits while an older commit's Codex thread is open (laaa-platform #415)", () => {
+  const base2 = { issueComments: [summary("completed", HEAD, false)], reviews: [review(8, OLD), review(9, HEAD)], inline: [finding(5, 8, 1)] };
+  let v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, false]]) }, NOW);
+  assert.equal(v.result, "pending");
+  assert.match(v.description, /1 Codex thread\(s\) still open/);
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, true]]) }, NOW);
+  assert.equal(v.result, "success");
+});
