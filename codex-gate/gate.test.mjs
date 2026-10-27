@@ -60,7 +60,7 @@ test("a P1 on an older commit stops blocking once Codex reviews the fix clean", 
 });
 
 test("completed with findings waits until the findings are readable", () => {
-  const v = run({ issueComments: [summary("completed", HEAD, true)] });
+  const v = run({ issueComments: [summary("completed", HEAD, true, 0.1)] });
   assert.equal(v.result, "pending");
 });
 
@@ -182,9 +182,9 @@ test("a plain-comment finding does not count for the head while the summary name
   assert.equal(v.result, "pending");
 });
 
-test("a completed summary whose findings never appear enters the retry path once stalled", () => {
-  const v = run({ issueComments: [summary("completed", HEAD, true, STALL_MS / 60000 + 2)], statuses: [status(60)] });
-  assert.equal(v.action, "retry");
+test("a completed summary with no review on the head after the settle window is a clean review", () => {
+  const v = run({ issueComments: [summary("completed", HEAD, true, 2)], statuses: [status(60)] });
+  assert.equal(v.result, "success");
 });
 
 test("a clean summary on the head outranks a late plain-comment finding from the previous review", () => {
@@ -201,4 +201,47 @@ test("one PR's failed dispatch is logged and the sweep goes on", async () => {
   const failed = await applySweep({ api, repo: "o/r", log: (l) => lines.push(l) });
   assert.equal(failed, 1);
   assert.match(lines[0], /failed: HTTP 404/);
+});
+
+test("a 'Fixed' reply on a finding raised on the head, with no later commit, fails the gate", () => {
+  const reply = (id, to, body) => ({ id, user: GLEN, in_reply_to_id: to, body });
+  const base2 = { issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)] };
+  let v = run({ ...base2, inline: [finding(5, 9, 2), reply(6, 5, "Fixed in abc1234.")] });
+  assert.equal(v.result, "failure");
+  v = run({ ...base2, inline: [finding(5, 9, 2), reply(6, 5, "Fixed in PR #12.")] });
+  assert.equal(v.result, "success");
+  v = run({ ...base2, inline: [finding(5, 9, 2), reply(6, 5, "Skipped: out of scope.")] });
+  assert.equal(v.result, "success");
+});
+
+test("a 'Fixed' reply on an older commit's finding passes once Codex reviewed the fix commit clean", () => {
+  const reply = { id: 6, user: GLEN, in_reply_to_id: 5, body: "Fixed in fffffff." };
+  const v = run({ issueComments: [summary("completed", HEAD, false)], reviews: [review(8, OLD), review(9, HEAD)], inline: [finding(5, 8, 2), reply] });
+  assert.equal(v.result, "success");
+});
+
+test("a clean re-review of a PR that once had findings passes once settled with no head review", () => {
+  const sum = { id: 1, user: CODEX, created_at: ago(60), updated_at: ago(2),
+    body: `<!-- codex-pull-request-review-summary -->
+<!-- codex-review-state:v1 {"code_review":{"commit_sha":"${HEAD}","has_any_findings":true,"has_unresolved_findings":false,"status":"completed"}} -->` };
+  const v = run({ issueComments: [sum], reviews: [review(8, OLD)], inline: [finding(5, 8, 2)] });
+  assert.equal(v.result, "success");
+});
+
+test("a P2 on the head waits until its thread is resolved, then passes", () => {
+  const base2 = { issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)], inline: [finding(5, 9, 2)] };
+  let v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, false]]) }, NOW);
+  assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, true]]) }, NOW);
+  assert.equal(v.result, "success");
+});
+
+test("right after completion with findings flagged, the gate waits for the review to post", () => {
+  const sum = { id: 1, user: CODEX, created_at: ago(60), updated_at: new Date(NOW - 10000).toISOString(),
+    body: `<!-- codex-pull-request-review-summary -->
+<!-- codex-review-state:v1 {"code_review":{"commit_sha":"${HEAD}","has_any_findings":true,"has_unresolved_findings":true,"status":"completed"}} -->` };
+  const v = run({ issueComments: [sum] });
+  assert.equal(v.result, "pending");
+  assert.equal(v.settling, true);
 });
