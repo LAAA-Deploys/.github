@@ -110,15 +110,16 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
         action: null,
       };
     }
-    // Every finding thread on the head is answered and resolved before the gate passes, so the check
-    // above sees each reply. Resolving a thread starts no workflow run (a review-comment event would run
-    // the PR's own copy of the workflow), so the PR watcher rechecks within 15 minutes, or a chat runs
-    // the workflow (Codex P2 on .github #6). threads: root comment id -> resolved.
-    const open = threads ? headFindings.filter((f) => f.pull_request_review_id && threads.get(f.id) === false) : [];
+    // Every Codex thread on the PR, on any commit, is answered and resolved before the gate passes:
+    // branch protection requires conversation resolution, so a gate that passed with an older thread open
+    // showed green on a PR that could not merge (laaa-platform #415, 10/26/2026). Resolving a thread starts
+    // no workflow run (a review-comment event would run the PR's own copy of the workflow), so the PR
+    // watcher rechecks within 15 minutes, or a chat runs the workflow. threads: root comment id -> resolved.
+    const open = threads ? inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && threads.get(c.id) === false) : [];
     if (open.length) {
       return {
         result: "pending",
-        description: `Codex reviewed ${short(head)}; ${open.length} finding(s) to answer and resolve before it passes.`,
+        description: `Codex reviewed ${short(head)}; ${open.length} Codex thread(s) still open: reply on and resolve each.`,
         action: null,
       };
     }
