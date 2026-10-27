@@ -1,0 +1,39 @@
+# The PR watcher (Glen, 10/27/2026; on Glen's PC 10/26 to 10/27): every 15 minutes it looks at each
+# open PR on the repos on the Codex review gate and catches a review that failed or stalled, which no
+# GitHub event reports. It posts the one "@codex review" retry as Glen (Codex answers a person's
+# request, so the token is his: the WATCHER_TOKEN secret, a classic token with repo and workflow) and
+# wakes the repo's codex-review workflow when the verdict moved. It never posts a status and never
+# merges. The logic is the gate's --sweep, run at the SHA this repo's codex-review.yml pins, the same
+# code every gated repo runs. The repo list is laaa-agent-config README step 5's; a repo added there
+# is added here. This repo is public, so the runs cost no Actions minutes.
+name: pr-watcher
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-watcher
+  cancel-in-progress: false
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Sweep the gated repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.WATCHER_TOKEN }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::The WATCHER_TOKEN secret is missing or empty"; exit 1; fi
+          sha=$(grep -oE 'LAAA-Deploys/\.github/codex-gate@[0-9a-f]{40}' .github/workflows/codex-review.yml | head -1 | cut -d@ -f2)
+          if [ -z "$sha" ]; then echo "::error::No codex-gate pin in codex-review.yml"; exit 1; fi
+          git show "$sha:codex-gate/gate.mjs" > "$RUNNER_TEMP/gate.mjs"
+          node "$RUNNER_TEMP/gate.mjs" --sweep \
+            gscher1311/laaa-agent-config gscher1311/LAAA-AI-Prompts gscher1311/laaa-platform \
+            gscher1311/laaa-geo LAAA-Deploys/apto-hub gscher1311/la-property-mcp \
+            gscher1311/buildium-assistant gscher1311/outlook-email-bridge LAAA-Deploys/laaa-comps \
+            LAAA-Deploys/.github
