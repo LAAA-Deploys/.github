@@ -81,7 +81,10 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
   // Done only when the summary says the review of the head completed. Codex flips it a few seconds
   // before its findings post, so a completed review that says it has findings counts once they are
   // readable; a finding alone, before the summary completes, is not a finished review.
-  const completed = onHead && status === "completed" && (state.has_any_findings === false || headFindings.length > 0);
+  // has_any_findings counts the whole PR's history, so a clean re-review of a PR that once had
+  // findings still says true; has_unresolved_findings false is the clean signal then (#333, 10/26/2026).
+  const completed = onHead && status === "completed" &&
+    (state.has_any_findings === false || state.has_unresolved_findings === false || headFindings.length > 0);
 
   if (completed) {
     if (blocking.length) {

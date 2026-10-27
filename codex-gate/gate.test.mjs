@@ -219,3 +219,11 @@ test("a 'Fixed' reply on an older commit's finding passes once Codex reviewed th
   const v = run({ issueComments: [summary("completed", HEAD, false)], reviews: [review(8, OLD), review(9, HEAD)], inline: [finding(5, 8, 2), reply] });
   assert.equal(v.result, "success");
 });
+
+test("a clean re-review of a PR that once had findings passes (has_unresolved_findings false)", () => {
+  const sum = { id: 1, user: CODEX, created_at: ago(60), updated_at: ago(2),
+    body: `<!-- codex-pull-request-review-summary -->
+<!-- codex-review-state:v1 {"code_review":{"commit_sha":"${HEAD}","has_any_findings":true,"has_unresolved_findings":false,"status":"completed"}} -->` };
+  const v = run({ issueComments: [sum], reviews: [review(8, OLD)], inline: [finding(5, 8, 2)] });
+  assert.equal(v.result, "success");
+});
