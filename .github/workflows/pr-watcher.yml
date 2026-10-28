@@ -12,7 +12,9 @@
 name: pr-watcher
 on:
   schedule:
-    - cron: "7,22,37,52 * * * *"
+    # The first cron line never fired after the workflow merged (10/27/2026, two hours, then a disable and
+    # enable); a changed line makes GitHub register the schedule again.
+    - cron: "11,26,41,56 * * * *"
   workflow_dispatch:
 permissions:
   contents: read
