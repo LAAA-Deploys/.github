@@ -30,7 +30,7 @@ jobs:
       github.event_name == 'workflow_dispatch' || (
         github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
         github.event.pull_request.user.type == 'Bot' && !github.event.comment.in_reply_to_id)
-    uses: LAAA-Deploys/.github/.github/workflows/codex-responder.yml@df0e4ffb38019fd9cc880cb536d970421758cc35
+    uses: LAAA-Deploys/.github/.github/workflows/codex-responder.yml@63c2cb90814fc1c1025a686c3df83e45cf42d217
     with:
       pr: ${{ inputs.pr }}
       comment: ${{ inputs.comment }}
