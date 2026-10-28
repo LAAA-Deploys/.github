@@ -260,7 +260,7 @@ test("a Codex thread open for an hour with no newer commit fails the gate and ta
   const base = (min) => ({ issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)], inline: [old(min)] });
   const head = { commit: { committer: { date: ago(120) } } };
   const at = (min, extra = {}, headCommit = head) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base(min), ...extra,
-    statuses: [status(20)], threads: new Map([[5, false]]), headCommit }, NOW);
+    statuses: [status(200)], threads: new Map([[5, false]]), headCommit }, NOW);
   let v = at(THREAD_MS / 60000 - 5);
   assert.equal(v.result, "pending");
   assert.equal(v.action, null);
@@ -282,7 +282,7 @@ test("a thread unanswered for half an hour is handed to the responder; one a per
   const root = (min) => ({ id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(min), body: "**![P2 Badge](x) Fix this**" });
   const head = { commit: { committer: { date: ago(120) } } };
   const at = (min, inline) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)],
-    reviews: [review(9, HEAD)], inline, statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+    reviews: [review(9, HEAD)], inline, statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
   let v = at(RESPOND_MS / 60000 - 5, [root(RESPOND_MS / 60000 - 5)]);
   assert.equal(v.result, "pending");
   assert.deepEqual(v.respond, []);
@@ -302,7 +302,7 @@ test("a stale thread still tags Glen and names the responder when the head fails
   const head = { commit: { committer: { date: ago(120) } } };
   const p1 = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(THREAD_MS / 60000 + 5), body: "**![P1 Badge](x) Fix this**" };
   let v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
-    inline: [p1], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+    inline: [p1], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
   assert.equal(v.result, "failure");
   assert.match(v.description, /P0\/P1/);
   assert.equal(v.action, "threads");
@@ -310,7 +310,7 @@ test("a stale thread still tags Glen and names the responder when the head fails
   const p2 = { ...p1, body: "**![P2 Badge](x) Fix this**" };
   const fixed = { id: 6, user: GLEN, in_reply_to_id: 5, created_at: ago(70), body: "Fixed" };
   v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
-    inline: [p2, fixed], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+    inline: [p2, fixed], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
   assert.equal(v.result, "failure");
   assert.match(v.description, /say fixed/);
   assert.equal(v.action, "threads");
@@ -322,6 +322,16 @@ test("the responder's own reply counts as an answer, so the sweep stops dispatch
   const root = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(RESPOND_MS / 60000 + 5), body: "**![P2 Badge](x) Fix this**" };
   const reply = { id: 6, user: { login: "claude[bot]", type: "Bot" }, in_reply_to_id: 5, created_at: ago(1), body: "Not a defect: the flag is parsed upstream." };
   const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
-    inline: [root, reply], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+    inline: [root, reply], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.deepEqual(v.respond, []);
+});
+
+test("a freshly pushed head gets the grace period even when its commit date and the thread are old", () => {
+  const head = { commit: { committer: { date: ago(180) } } };
+  const root = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(THREAD_MS / 60000 + 30), body: "**![P2 Badge](x) Fix this**" };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [root], statuses: [status(2)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
   assert.deepEqual(v.respond, []);
 });

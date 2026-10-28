@@ -54,6 +54,17 @@ jobs:
           echo "$pr" | jq -e '.state == "open"' >/dev/null || { echo "PR is not open; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
           # A fork's branch is not in this repository: the checkout below would land on a base branch of the same name.
           echo "$pr" | jq -e ".head.repo.full_name == \"$GITHUB_REPOSITORY\"" >/dev/null || { echo "PR comes from a fork; the responder does not push to forks"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          # The thread's id, paged (a PR can carry more than 100 threads); Claude resolves it by this id.
+          tid=""; after=""
+          while [ -z "$tid" ]; do
+            if [ -z "$after" ]; then page="first:100"; else page="first:100,after:\"$after\""; fi
+            out=$(gh api graphql -f query="query{repository(owner:\"${GITHUB_REPOSITORY%/*}\",name:\"${GITHUB_REPOSITORY#*/}\"){pullRequest(number:$PR){reviewThreads($page){pageInfo{hasNextPage endCursor} nodes{id comments(first:1){nodes{databaseId}}}}}}}")
+            tid=$(echo "$out" | jq -r --argjson id "$COMMENT" '.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].databaseId == $id) | .id')
+            after=$(echo "$out" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo | if .hasNextPage then .endCursor else empty end')
+            if [ -z "$tid" ] && [ -z "$after" ]; then break; fi
+          done
+          if [ -z "$tid" ]; then echo "::error::No review thread starts with comment $COMMENT"; exit 1; fi
+          echo "thread=$tid" >> "$GITHUB_OUTPUT"
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "path=$(echo "$c" | jq -r .path)" >> "$GITHUB_OUTPUT"
           { echo "body<<__END__"; echo "$c" | jq -r .body; echo "__END__"; } >> "$GITHUB_OUTPUT"
@@ -94,10 +105,8 @@ jobs:
                and why, or why it is not a defect, with
                `gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments/${{ env.COMMENT }}/replies -f body='...'`.
                Say "Fixed" only after the push succeeded; otherwise say what really happened.
-            4. Resolve the thread: find its id with
-               `gh api graphql -f query='query{repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ env.PR }}){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'`
-               (the thread whose first comment's databaseId is ${{ env.COMMENT }}), then
-               `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
+            4. Resolve the thread, whose id is `${{ steps.finding.outputs.thread }}`:
+               `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"${{ steps.finding.outputs.thread }}"}){thread{isResolved}}}'`.
             5. Stop. Do not open a PR, do not merge, do not comment anywhere else, and do not answer any other
                finding: each gets its own run.
 

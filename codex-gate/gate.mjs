@@ -108,9 +108,11 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
     // Threads with no reply from anyone but Codex after RESPOND_MS: the sweep hands each to the responder
     // (ids of the roots). Open for THREAD_MS with no push after the newest thread: nobody is answering, so
     // the verdict carries the tag for Glen once per head, whatever else it says; a push resets the clock.
-    const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, t(c.created_at)) > RESPOND_MS &&
+    // The clocks start when the gate first saw this head (since), not at the commit's own date: a push of
+    // an older commit still gets the grace period (Codex, #12).
+    const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, since, t(c.created_at)) > RESPOND_MS &&
       !inline.some((r) => r.in_reply_to_id === c.id && !isCodex(r.user))).map((c) => c.id);
-    const newest = open.length ? Math.max(headTime, ...open.map((c) => t(c.created_at))) : 0;
+    const newest = open.length ? Math.max(headTime, since, ...open.map((c) => t(c.created_at))) : 0;
     const stale = Boolean(newest) && now - newest > THREAD_MS;
     const noticedThreads = issueComments.some((c) => (c.body ?? "").includes(threadsMarker(head)));
     const escalation = { action: stale && !noticedThreads ? "threads" : null, open: open.length, respond };
