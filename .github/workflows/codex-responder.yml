@@ -1,18 +1,26 @@
-# The Codex responder (Glen, 10/27/2026): answers a Codex review finding on a PR that no chat owns,
-# a PR opened by a bot (Dependabot, a routine). A PR a chat opened in the desktop app is answered by
-# that chat, which the app wakes through Auto-fix; this covers the rest, so no PR sits on an open
-# thread until the gate tags Glen an hour later. One run per finding: fix a real defect on the PR
-# branch and push (Codex reviews the push, the gate re-evaluates), or reply why it is not one; then
-# resolve the thread. Replies and the resolve are made as Glen with the watcher's fine-grained token
-# for the repo's owner (GH_TOKEN below); the push is the Claude GitHub App's. Claude runs on Glen's
-# subscription (CLAUDE_CODE_OAUTH_TOKEN from `claude setup-token`), never an API key.
-#
-# Called from each gated repo's `.github/workflows/codex-responder.yml` on
-# pull_request_review_comment (created) when the comment is Codex's, the PR's author is a bot and the
-# comment starts a thread; the caller pins this file to a commit SHA of this repo, like the gate.
+# The Codex responder (Glen, 10/27/2026): answers one Codex review finding that nobody else is
+# answering. Two ways in, both through each gated repo's own `.github/workflows/codex-responder.yml`,
+# which pins this file to a commit SHA of this repo like the gate: the comment event, at once, when
+# a bot opened the PR (Dependabot, a routine: no chat owns it); and a dispatch from the PR watcher's
+# sweep when a thread on any PR has had no reply from a person for 30 minutes (gate.mjs RESPOND_MS),
+# after the chat that opened it had its chance. The gate tags Glen at 60 minutes if it is still open.
+# One run per finding: fix a real defect on the PR branch and push (Codex reviews the push, the gate
+# re-evaluates), or reply why it is not one; then resolve the thread. The reply and the resolve are
+# made as Glen with the watcher's fine-grained token for the repo's owner (GH_TOKEN below); the push
+# is the Claude GitHub App's. Claude runs on Glen's subscription (CLAUDE_CODE_OAUTH_TOKEN from
+# `claude setup-token`), never an API key. A missing secret fails the run and does nothing else.
 name: codex-responder
 on:
   workflow_call:
+    inputs:
+      pr:
+        description: PR number (the dispatch path; the comment event carries its own)
+        required: false
+        type: string
+      comment:
+        description: Review comment id of the finding's root (the dispatch path)
+        required: false
+        type: string
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         required: true
@@ -26,21 +34,38 @@ permissions:
   issues: write
   id-token: write
   actions: read
-concurrency:
-  group: codex-responder-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 jobs:
   respond:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.repository_owner == 'LAAA-Deploys' && secrets.WATCHER_TOKEN_ORG || secrets.WATCHER_TOKEN_USER }}
+      PR: ${{ inputs.pr || github.event.pull_request.number }}
+      COMMENT: ${{ inputs.comment || github.event.comment.id }}
     steps:
+      - name: Read the finding and the PR
+        id: finding
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::error::The watcher token secret for this owner is missing"; exit 1; fi
+          c=$(gh api "repos/$GITHUB_REPOSITORY/pulls/comments/$COMMENT")
+          echo "$c" | jq -e '.user.login == "chatgpt-codex-connector[bot]" and .in_reply_to_id == null' >/dev/null || { echo "Not a Codex finding root; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          replies=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments?per_page=100" --paginate | jq "[.[] | select(.in_reply_to_id == $COMMENT and .user.type != \"Bot\")] | length")
+          if [ "$replies" != "0" ]; then echo "A person already answered this thread; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "path=$(echo "$c" | jq -r .path)" >> "$GITHUB_OUTPUT"
+          echo "node=$(echo "$c" | jq -r .node_id)" >> "$GITHUB_OUTPUT"
+          { echo "body<<__END__"; echo "$c" | jq -r .body; echo "__END__"; } >> "$GITHUB_OUTPUT"
+          pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")
+          echo "head=$(echo "$pr" | jq -r .head.ref)" >> "$GITHUB_OUTPUT"
+          echo "author=$(echo "$pr" | jq -r .user.login)" >> "$GITHUB_OUTPUT"
+          echo "$pr" | jq -e '.state == "open"' >/dev/null || { echo "PR is not open; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; }
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: steps.finding.outputs.skip == 'false'
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ steps.finding.outputs.head }}
           fetch-depth: 0
       - uses: anthropics/claude-code-action@d70510b174a1244958df0b03166a54912811f3e6 # v1
-        env:
-          GH_TOKEN: ${{ github.repository_owner == 'LAAA-Deploys' && secrets.WATCHER_TOKEN_ORG || secrets.WATCHER_TOKEN_USER }}
+        if: steps.finding.outputs.skip == 'false'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           allowed_bots: "chatgpt-codex-connector[bot]"
@@ -48,33 +73,31 @@ jobs:
             --max-turns 40
             --allowedTools "Read,Glob,Grep,Edit,Write,Bash(git:*),Bash(gh:*),Bash(npm:*),Bash(npx:*),Bash(node:*),Bash(python:*),Bash(python3:*),Bash(pip:*)"
           prompt: |
-            You are answering one Codex code-review finding on pull request #${{ github.event.pull_request.number }}
-            in ${{ github.repository }}. The PR was opened by ${{ github.event.pull_request.user.login }}, a bot,
-            so no chat owns it; you do. The checkout is the PR branch `${{ github.event.pull_request.head.ref }}`.
+            You are answering one Codex code-review finding on pull request #${{ env.PR }} in ${{ github.repository }},
+            opened by ${{ steps.finding.outputs.author }}. Nobody else is answering it, so you do. The checkout is the
+            PR branch `${{ steps.finding.outputs.head }}`.
 
-            The finding (review comment ${{ github.event.comment.id }}, node ${{ github.event.comment.node_id }},
-            on `${{ github.event.comment.path }}`):
+            The finding (review comment ${{ env.COMMENT }}, on `${{ steps.finding.outputs.path }}`):
 
-            ${{ github.event.comment.body }}
+            ${{ steps.finding.outputs.body }}
 
             Do this, in order:
-            1. Read the PR diff (`gh pr diff ${{ github.event.pull_request.number }}`) and the file the finding names.
-               Decide whether the finding is a real defect introduced or exposed by this PR. A P0 or P1 that is
-               real blocks the merge; a P2 or P3 is fixed when it is a real defect or a clearly correct, small,
-               in-scope improvement, and otherwise answered.
-            2. If it is real: make the smallest correct fix on this branch, run the repository's own tests if it
-               has any (read its README or package.json to find them), commit with a one-line message that names
-               the finding, and push to the PR branch. Never force-push, never touch another branch, never change
-               files the finding does not concern.
+            1. Read the PR diff (`gh pr diff ${{ env.PR }}`) and the file the finding names. Decide whether the
+               finding is a real defect introduced or exposed by this PR. A real P0 or P1 blocks the merge; a P2 or
+               P3 is fixed when it is a real defect or a clearly correct, small, in-scope improvement, otherwise answered.
+            2. If it is real: make the smallest correct fix on this branch, run the repository's own tests if it has
+               any (its README or package.json says how), commit with a one-line message naming the finding, and
+               push to the PR branch. Never force-push, never touch another branch, never change files the finding
+               does not concern.
             3. Reply on the finding's thread as a teammate would, in one to three plain sentences: what you changed
-               and why, or why it is not a defect. Use
-               `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments/${{ github.event.comment.id }}/replies -f body='...'`.
+               and why, or why it is not a defect, with
+               `gh api repos/${{ github.repository }}/pulls/${{ env.PR }}/comments/${{ env.COMMENT }}/replies -f body='...'`.
                Say "Fixed" only after the push succeeded; otherwise say what really happened.
             4. Resolve the thread: find its id with
-               `gh api graphql -f query='query{repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ github.event.pull_request.number }}){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'`
-               (the thread whose first comment's databaseId is ${{ github.event.comment.id }}), then
+               `gh api graphql -f query='query{repository(owner:"${{ github.repository_owner }}",name:"${{ github.event.repository.name }}"){pullRequest(number:${{ env.PR }}){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{databaseId}}}}}}}'`
+               (the thread whose first comment's databaseId is ${{ env.COMMENT }}), then
                `gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:"<id>"}){thread{isResolved}}}'`.
             5. Stop. Do not open a PR, do not merge, do not comment anywhere else, and do not answer any other
                finding: each gets its own run.
 
-            If GH_TOKEN is missing or a command is refused, say so in your final message and stop without guessing.
+            If a command is refused, say so in your final message and stop without guessing.

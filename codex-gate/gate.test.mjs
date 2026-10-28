@@ -1,7 +1,7 @@
 // The gate's verdicts on fixed GitHub data, no network:  node --test codex-gate/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, commentFor, STALL_MS, THREAD_MS } from "./gate.mjs";
+import { evaluate, commentFor, STALL_MS, THREAD_MS, RESPOND_MS } from "./gate.mjs";
 
 const NOW = Date.parse("2026-10-26T20:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -276,4 +276,24 @@ test("a Codex thread open for an hour with no newer commit fails the gate and ta
   // A push after the thread restarts the clock: the head commit is newer than the open thread.
   v = at(THREAD_MS / 60000 + 5, {}, { commit: { committer: { date: ago(10) } } });
   assert.equal(v.result, "pending");
+});
+
+test("a thread unanswered for half an hour is handed to the responder; one a person answered is not", () => {
+  const root = (min) => ({ id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(min), body: "**![P2 Badge](x) Fix this**" });
+  const head = { commit: { committer: { date: ago(120) } } };
+  const at = (min, inline) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)],
+    reviews: [review(9, HEAD)], inline, statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  let v = at(RESPOND_MS / 60000 - 5, [root(RESPOND_MS / 60000 - 5)]);
+  assert.equal(v.result, "pending");
+  assert.deepEqual(v.respond, []);
+  v = at(RESPOND_MS / 60000 + 5, [root(RESPOND_MS / 60000 + 5)]);
+  assert.equal(v.result, "pending");
+  assert.deepEqual(v.respond, [5]);
+  const reply = { id: 6, user: GLEN, in_reply_to_id: 5, created_at: ago(2), body: "Not a defect: the flag is parsed upstream." };
+  v = at(RESPOND_MS / 60000 + 5, [root(RESPOND_MS / 60000 + 5), reply]);
+  assert.deepEqual(v.respond, []);
+  // Past an hour it still names the thread, beside the tag for Glen.
+  v = at(THREAD_MS / 60000 + 5, [root(THREAD_MS / 60000 + 5)]);
+  assert.equal(v.result, "failure");
+  assert.deepEqual(v.respond, [5]);
 });

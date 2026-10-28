@@ -26,7 +26,10 @@
 
 export const CONTEXT = "codex-review";
 export const STALL_MS = 15 * 60 * 1000;
-// An open Codex thread with no newer commit waits this long before the gate fails and tags Glen.
+// An open Codex thread with no reply from a person and no newer commit: after RESPOND_MS the watcher's
+// sweep dispatches the repo's codex-responder workflow for it (a chat's own PR had its chance; a bot's
+// PR got the responder at once from the comment event); after THREAD_MS the gate fails and tags Glen.
+export const RESPOND_MS = 30 * 60 * 1000;
 export const THREAD_MS = 60 * 60 * 1000;
 // Codex posts a run's findings within seconds of marking its summary completed.
 export const SETTLE_MS = 45 * 1000;
@@ -125,6 +128,9 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
       // Open for an hour with no push after the newest thread: nobody is answering. Fail and tag Glen
       // once per head, the same path a twice-stalled review takes; a push resets the head and the clock.
       const newest = Math.max(headTime, ...open.map((c) => t(c.created_at)));
+      // Threads nobody has answered after RESPOND_MS: the sweep hands each to the responder (ids of the roots).
+      const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, t(c.created_at)) > RESPOND_MS &&
+        !inline.some((r) => r.in_reply_to_id === c.id && !isBot(r.user))).map((c) => c.id);
       if (newest && now - newest > THREAD_MS) {
         const noticedThreads = issueComments.some((c) => (c.body ?? "").includes(threadsMarker(head)));
         return {
@@ -132,12 +138,14 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
           description: `Needs attention: ${open.length} Codex thread(s) open over an hour on ${short(head)} with no newer commit. Glen is tagged.`,
           action: noticedThreads ? null : "threads",
           open: open.length,
+          respond,
         };
       }
       return {
         result: "pending",
         description: `Codex reviewed ${short(head)}; ${open.length} Codex thread(s) still open: reply on and resolve each.`,
         action: null,
+        respond,
       };
     }
     const n = headFindings.length;
@@ -305,6 +313,16 @@ export async function applySweep({ api, repo, log = console.log }) {
       if (latest?.state === "success") continue;
       const v = evaluate(data);
       if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
+      // A thread unanswered for RESPOND_MS goes to the repo's responder, one dispatch per thread per sweep;
+      // its reply ends the dispatches, and a repo without the workflow is logged and skipped.
+      for (const id of v.respond ?? []) {
+        try {
+          await api.post(`repos/${repo}/actions/workflows/codex-responder.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number), comment: String(id) } });
+          log(`${repo}#${p.number} responder dispatched for thread ${id}`);
+        } catch (e) {
+          log(`${repo}#${p.number} responder dispatch for thread ${id} failed: ${e?.message ?? e}`);
+        }
+      }
       if (v.action === "attention" || v.action === "threads" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
         await api.post(`repos/${repo}/actions/workflows/codex-review.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number) } });
       }
