@@ -1,0 +1,47 @@
+# The PR watcher (Glen, 10/27/2026; on Glen's PC 10/26 to 10/27): every 15 minutes it looks at each
+# open PR on the repos on the Codex review gate and catches a review that failed or stalled, which no
+# GitHub event reports, and a Codex thread left open for an hour. It posts the one "@codex review"
+# retry as Glen (Codex answers a person's request, so the tokens are his: two fine-grained personal
+# access tokens, one per owner, since a fine-grained token covers one owner only: WATCHER_TOKEN_USER
+# for gscher1311's repos and WATCHER_TOKEN_ORG for LAAA-Deploys', each with Pull requests: write,
+# Actions: write, Commit statuses: read, Contents: read, Metadata: read) and wakes the repo's codex-review workflow when the
+# verdict moved. It never posts a status and never merges. The logic is the gate's --sweep, run at the
+# SHA this repo's codex-review.yml pins, the same code every gated repo runs. The repo list is
+# laaa-agent-config README step 5's; a repo added there is added here. This repo is public, so the
+# runs cost no Actions minutes.
+name: pr-watcher
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-watcher
+  cancel-in-progress: false
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch the pinned gate
+        run: |
+          sha=$(grep -oE 'LAAA-Deploys/\.github/codex-gate@[0-9a-f]{40}' .github/workflows/codex-review.yml | head -1 | cut -d@ -f2)
+          if [ -z "$sha" ]; then echo "::error::No codex-gate pin in codex-review.yml"; exit 1; fi
+          git show "$sha:codex-gate/gate.mjs" > "$RUNNER_TEMP/gate.mjs"
+      - name: Sweep gscher1311's gated repos
+        env:
+          GITHUB_TOKEN: ${{ secrets.WATCHER_TOKEN_USER }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::The WATCHER_TOKEN_USER secret is missing or empty"; exit 1; fi
+          node "$RUNNER_TEMP/gate.mjs" --sweep             gscher1311/laaa-agent-config gscher1311/LAAA-AI-Prompts gscher1311/laaa-platform             gscher1311/laaa-geo gscher1311/la-property-mcp gscher1311/buildium-assistant             gscher1311/outlook-email-bridge gscher1311/laaa-make gscher1311/laaa-research             gscher1311/laaa-quo gscher1311/outlook-mcp-calendar gscher1311/la-zoning-engine             gscher1311/laaa-listing-video
+      - name: Sweep LAAA-Deploys' gated repos
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.WATCHER_TOKEN_ORG }}
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::error::The WATCHER_TOKEN_ORG secret is missing or empty"; exit 1; fi
+          node "$RUNNER_TEMP/gate.mjs" --sweep LAAA-Deploys/apto-hub LAAA-Deploys/laaa-comps LAAA-Deploys/.github
