@@ -21,14 +21,16 @@ permissions:
   statuses: write
   pull-requests: write
   issues: write
-# Two concurrency groups per PR: the PR-event run keeps its own, so a comment run never cancels it
-# (a cancelled run leaves a cancelled check run on the head for good: 77 heads on 10/27/2026, every
-# one showing a red X with all required checks green). Comment and dispatch runs still replace each other.
-concurrency:
-  group: codex-review-${{ github.event_name == 'pull_request_target' && 'pr' || 'comment' }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
-  cancel-in-progress: true
 jobs:
   gate:
+    # Concurrency sits on this job, after its filter, so a run the filter skips (an ordinary comment) never
+    # cancels an evaluation. Two groups per PR: the PR-event run keeps its own, so a Vercel or Codex comment
+    # seconds after a push cannot cancel it (a cancelled run leaves a cancelled check run on the head for
+    # good, a red X with every required check green; 77 heads on 10/27/2026). Comment and dispatch runs
+    # still replace each other.
+    concurrency:
+      group: codex-review-${{ github.event_name == 'pull_request_target' && 'pr' || 'comment' }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
     # Skip comment runs that cannot change the verdict: comments on issues, and new comments from
     # people that are not a Codex request. Edits and deletions always rerun.
     if: >-
