@@ -47,10 +47,13 @@ jobs:
         run: |
           c=$(gh api "repos/$GITHUB_REPOSITORY/pulls/comments/$COMMENT")
           echo "$c" | jq -e '.user.login == "chatgpt-codex-connector[bot]" and .in_reply_to_id == null' >/dev/null || { echo "Not a Codex finding root; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
-          replies=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments?per_page=100" --paginate | jq "[.[] | select(.in_reply_to_id == $COMMENT and .user.login != \"chatgpt-codex-connector[bot]\")] | length")
+          # --slurp joins the pages into one array of arrays; without it each page counts on its own line.
+          replies=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/comments?per_page=100" --paginate --slurp | jq "[.[][] | select(.in_reply_to_id == $COMMENT and .user.login != \"chatgpt-codex-connector[bot]\")] | length")
           if [ "$replies" != "0" ]; then echo "This thread already has an answer; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR")
           echo "$pr" | jq -e '.state == "open"' >/dev/null || { echo "PR is not open; nothing to do"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          # A fork's branch is not in this repository: the checkout below would land on a base branch of the same name.
+          echo "$pr" | jq -e ".head.repo.full_name == \"$GITHUB_REPOSITORY\"" >/dev/null || { echo "PR comes from a fork; the responder does not push to forks"; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; }
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "path=$(echo "$c" | jq -r .path)" >> "$GITHUB_OUTPUT"
           { echo "body<<__END__"; echo "$c" | jq -r .body; echo "__END__"; } >> "$GITHUB_OUTPUT"
