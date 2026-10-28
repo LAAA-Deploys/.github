@@ -4,7 +4,7 @@
 # retry as Glen (Codex answers a person's request, so the tokens are his: two fine-grained personal
 # access tokens, one per owner, since a fine-grained token covers one owner only: WATCHER_TOKEN_USER
 # for gscher1311's repos and WATCHER_TOKEN_ORG for LAAA-Deploys', each with Pull requests: write,
-# Actions: write, Contents: read, Metadata: read) and wakes the repo's codex-review workflow when the
+# Actions: write, Commit statuses: read, Contents: read, Metadata: read) and wakes the repo's codex-review workflow when the
 # verdict moved. It never posts a status and never merges. The logic is the gate's --sweep, run at the
 # SHA this repo's codex-review.yml pins, the same code every gated repo runs. The repo list is
 # laaa-agent-config README step 5's; a repo added there is added here. This repo is public, so the
