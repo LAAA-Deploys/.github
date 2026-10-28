@@ -1,0 +1,37 @@
+# The Codex responder (Glen, 10/27/2026): a Codex finding nobody answers is answered by the shared
+# responder, LAAA-Deploys/.github .github/workflows/codex-responder.yml, pinned below to a full commit
+# SHA: at once from the comment event when a bot opened the PR (Dependabot, a routine: no chat owns
+# it), and by a dispatch from the PR watcher's sweep when a thread on any PR has had no reply from a
+# person for 30 minutes. It fixes a real defect on the PR branch and pushes, or replies why not, then
+# resolves the thread, as the Claude GitHub App on Glen's subscription. This repo holds the shared workflow
+# itself at codex-responder.yml, so its caller carries this name. A chat's own PR is the chat's
+# first (laaa-agent-config README step 5). Needs the CLAUDE_CODE_OAUTH_TOKEN secret on this repo.
+name: codex-responder-caller
+on:
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+      comment:
+        description: Review comment id of the finding's root
+        required: true
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  id-token: write
+  actions: read
+jobs:
+  respond:
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        github.event.comment.user.login == 'chatgpt-codex-connector[bot]' &&
+        github.event.pull_request.user.type == 'Bot' && !github.event.comment.in_reply_to_id)
+    uses: LAAA-Deploys/.github/.github/workflows/codex-responder.yml@df0e4ffb38019fd9cc880cb536d970421758cc35
+    with:
+      pr: ${{ inputs.pr }}
+      comment: ${{ inputs.comment }}
+    secrets: inherit

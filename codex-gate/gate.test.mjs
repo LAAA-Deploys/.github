@@ -1,7 +1,7 @@
 // The gate's verdicts on fixed GitHub data, no network:  node --test codex-gate/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, commentFor, STALL_MS, THREAD_MS, RESPOND_MS } from "./gate.mjs";
+import { evaluate, commentFor, STALL_MS, THREAD_MS, RESPOND_MS, responderWorkflow } from "./gate.mjs";
 
 const NOW = Date.parse("2026-10-26T20:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -334,4 +334,9 @@ test("a freshly pushed head gets the grace period even when its commit date and 
   assert.equal(v.result, "pending");
   assert.equal(v.action, null);
   assert.deepEqual(v.respond, []);
+});
+
+test("the sweep dispatches each repo's responder caller, which has another name in the repo that holds the shared one", () => {
+  assert.equal(responderWorkflow("gscher1311/laaa-make"), "codex-responder.yml");
+  assert.equal(responderWorkflow("LAAA-Deploys/.github"), "codex-responder-caller.yml");
 });

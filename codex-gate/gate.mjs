@@ -299,6 +299,10 @@ export async function applyEvent({ api, commentApi = null, repo, n, exempt = nul
   log(`#${n} ${short(head)} ${v.result}${v.action ? " +" + v.action : ""}`);
 }
 
+// The repo's responder caller: codex-responder.yml everywhere, except in the repo that holds the shared
+// responder at that path, whose caller is codex-responder-caller.yml (#14).
+export const responderWorkflow = (repo) => (repo === "LAAA-Deploys/.github" ? "codex-responder-caller.yml" : "codex-responder.yml");
+
 // The watcher's pass over one repo: retry as a person, and wake the workflow when the verdict moved.
 // One PR's failure (a repo without the workflow yet, a GitHub error) is logged and the rest go on;
 // the return value is the number of PRs that failed.
@@ -319,7 +323,7 @@ export async function applySweep({ api, repo, log = console.log }) {
       // its reply ends the dispatches, and a repo without the workflow is logged and skipped.
       for (const id of v.respond ?? []) {
         try {
-          await api.post(`repos/${repo}/actions/workflows/codex-responder.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number), comment: String(id) } });
+          await api.post(`repos/${repo}/actions/workflows/${responderWorkflow(repo)}/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number), comment: String(id) } });
           log(`${repo}#${p.number} responder dispatched for thread ${id}`);
         } catch (e) {
           log(`${repo}#${p.number} responder dispatch for thread ${id} failed: ${e?.message ?? e}`);
