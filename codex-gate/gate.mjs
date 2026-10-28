@@ -8,7 +8,9 @@
 //   - A P0 or P1 finding on the head blocks. Fix it and push; Codex reviews the new head. A
 //     rebutted false positive passes only on Glen's own "force merge #N" (laaa-agent-config README).
 //   - Every other finding passes the gate; its thread is answered and resolved, which GitHub's
-//     required conversation resolution enforces.
+//     required conversation resolution enforces. A thread left open for THREAD_MS with no newer
+//     commit turns the status to failure and tags Glen, so no PR sits silently (10/27/2026: Codex
+//     posts after the chat that opened the PR has stopped, and nothing else was listening).
 //   - A review that failed, or made no progress for STALL_MS, is asked for once more. If that one
 //     also fails or stalls, the status turns to failure and Glen is tagged on the PR, so GitHub
 //     notifies him. Nothing ever passes without a review.
@@ -24,6 +26,11 @@
 
 export const CONTEXT = "codex-review";
 export const STALL_MS = 15 * 60 * 1000;
+// An open Codex thread with no reply from anyone but Codex and no newer commit: after RESPOND_MS the
+// watcher's sweep dispatches the repo's codex-responder workflow for it (a chat's own PR had its chance;
+// a bot's PR got the responder at once from the comment event); after THREAD_MS the gate tags Glen.
+export const RESPOND_MS = 30 * 60 * 1000;
+export const THREAD_MS = 60 * 60 * 1000;
 // Codex posts a run's findings within seconds of marking its summary completed.
 export const SETTLE_MS = 45 * 1000;
 export const CODEX_LOGIN = "chatgpt-codex-connector[bot]";
@@ -36,6 +43,7 @@ const short = (sha) => sha.slice(0, 7);
 const severity = (body) => (body ?? "").match(/!\[P([0-3]) Badge\]/)?.[1] ?? null;
 const retryMarker = (sha) => `<!-- codex-gate:retry ${sha} -->`;
 const attentionMarker = (sha) => `<!-- codex-gate:attention ${sha} -->`;
+const threadsMarker = (sha) => `<!-- codex-gate:threads ${sha} -->`;
 
 export function codexState(summary) {
   const m = (summary?.body ?? "").match(/codex-review-state:v1\s*(\{.*?\})\s*-->/s);
@@ -91,11 +99,29 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
     (state.has_any_findings === false || headFindings.length > 0 || (settled && headReviewIds.size === 0));
 
   if (completed) {
+    // Every Codex thread on the PR, on any commit, is answered and resolved before the gate passes:
+    // branch protection requires conversation resolution, so a gate that passed with an older thread open
+    // showed green on a PR that could not merge (laaa-platform #415, 10/26/2026). Resolving a thread starts
+    // no workflow run (a review-comment event would run the PR's own copy of the workflow), so the PR
+    // watcher rechecks within 15 minutes, or a chat runs the workflow. threads: root comment id -> resolved.
+    const open = threads ? inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && threads.get(c.id) === false) : [];
+    // Threads with no reply from anyone but Codex after RESPOND_MS: the sweep hands each to the responder
+    // (ids of the roots). Open for THREAD_MS with no push after the newest thread: nobody is answering, so
+    // the verdict carries the tag for Glen once per head, whatever else it says; a push resets the clock.
+    // The clocks start when the gate first saw this head (since), not at the commit's own date: a push of
+    // an older commit still gets the grace period (Codex, #12).
+    const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, since, t(c.created_at)) > RESPOND_MS &&
+      !inline.some((r) => r.in_reply_to_id === c.id && !isCodex(r.user))).map((c) => c.id);
+    const newest = open.length ? Math.max(headTime, since, ...open.map((c) => t(c.created_at))) : 0;
+    const stale = Boolean(newest) && now - newest > THREAD_MS;
+    const noticedThreads = issueComments.some((c) => (c.body ?? "").includes(threadsMarker(head)));
+    const escalation = { action: stale && !noticedThreads ? "threads" : null, open: open.length, respond };
+
     if (blocking.length) {
       return {
         result: "failure",
         description: `Codex found ${blocking.length} P0/P1 on ${short(head)}: fix and push (Codex re-reviews), or Glen's "force merge".`,
-        action: null,
+        ...escalation,
       };
     }
     // A finding Codex raised on the head commit cannot have been fixed yet: no commit came after it.
@@ -107,20 +133,21 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
       return {
         result: "failure",
         description: `${claimedFixed.length} thread(s) on ${short(head)} say fixed, but no commit came after the finding: push the fix.`,
-        action: null,
+        ...escalation,
       };
     }
-    // Every Codex thread on the PR, on any commit, is answered and resolved before the gate passes:
-    // branch protection requires conversation resolution, so a gate that passed with an older thread open
-    // showed green on a PR that could not merge (laaa-platform #415, 10/26/2026). Resolving a thread starts
-    // no workflow run (a review-comment event would run the PR's own copy of the workflow), so the PR
-    // watcher rechecks within 15 minutes, or a chat runs the workflow. threads: root comment id -> resolved.
-    const open = threads ? inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && threads.get(c.id) === false) : [];
     if (open.length) {
+      if (stale) {
+        return {
+          result: "failure",
+          description: `Needs attention: ${open.length} Codex thread(s) open over an hour on ${short(head)} with no newer commit. Glen is tagged.`,
+          ...escalation,
+        };
+      }
       return {
         result: "pending",
         description: `Codex reviewed ${short(head)}; ${open.length} Codex thread(s) still open: reply on and resolve each.`,
-        action: null,
+        ...escalation,
       };
     }
     const n = headFindings.length;
@@ -160,8 +187,13 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
   return { result: "pending", description: `Asked Codex again; waiting for its review of ${short(head)}.`, action: null };
 }
 
-export function commentFor(action, head) {
+export function commentFor(action, head, open = 0) {
   if (action === "retry") return `@codex review\n\n${retryMarker(head)}`;
+  if (action === "threads") {
+    return `${NOTIFY} ${open} Codex thread(s) on \`${short(head)}\` have been open for over an hour with no newer commit, so this PR ` +
+      `cannot merge. Reply on each thread (push the fix first if there is one) and resolve it; the gate rechecks within 15 minutes, ` +
+      `or \`gh workflow run codex-review.yml -f pr=<N>\` rechecks at once.\n\n${threadsMarker(head)}`;
+  }
   return `${NOTIFY} Codex has not finished reviewing \`${short(head)}\` after one retry, so this PR cannot merge. ` +
     `Check Codex for this repo (usage limits, setup), then push a commit or comment \`@codex review\`.\n\n${attentionMarker(head)}`;
 }
@@ -260,10 +292,16 @@ export async function applyEvent({ api, commentApi = null, repo, n, exempt = nul
       state: v.result, context: CONTEXT, description: v.description.slice(0, 140), target_url: data.pr.html_url,
     });
   }
-  if (v.action === "attention") await api.post(`repos/${repo}/issues/${n}/comments`, { body: commentFor("attention", head) });
+  if (v.action === "attention" || v.action === "threads") {
+    await api.post(`repos/${repo}/issues/${n}/comments`, { body: commentFor(v.action, head, v.open) });
+  }
   if (v.action === "retry" && commentApi) await commentApi.post(`repos/${repo}/issues/${n}/comments`, { body: commentFor("retry", head) });
   log(`#${n} ${short(head)} ${v.result}${v.action ? " +" + v.action : ""}`);
 }
+
+// The repo's responder caller: codex-responder.yml everywhere, except in the repo that holds the shared
+// responder at that path, whose caller is codex-responder-caller.yml (#14).
+export const responderWorkflow = (repo) => (repo === "LAAA-Deploys/.github" ? "codex-responder-caller.yml" : "codex-responder.yml");
 
 // The watcher's pass over one repo: retry as a person, and wake the workflow when the verdict moved.
 // One PR's failure (a repo without the workflow yet, a GitHub error) is logged and the rest go on;
@@ -281,7 +319,17 @@ export async function applySweep({ api, repo, log = console.log }) {
       if (latest?.state === "success") continue;
       const v = evaluate(data);
       if (v.action === "retry") await api.post(`repos/${repo}/issues/${p.number}/comments`, { body: commentFor("retry", head) });
-      if (v.action === "attention" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
+      // A thread unanswered for RESPOND_MS goes to the repo's responder, one dispatch per thread per sweep;
+      // its reply ends the dispatches, and a repo without the workflow is logged and skipped.
+      for (const id of v.respond ?? []) {
+        try {
+          await api.post(`repos/${repo}/actions/workflows/${responderWorkflow(repo)}/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number), comment: String(id) } });
+          log(`${repo}#${p.number} responder dispatched for thread ${id}`);
+        } catch (e) {
+          log(`${repo}#${p.number} responder dispatch for thread ${id} failed: ${e?.message ?? e}`);
+        }
+      }
+      if (v.action === "attention" || v.action === "threads" || describe(latest) !== `${v.result}|${v.description.slice(0, 140)}`) {
         await api.post(`repos/${repo}/actions/workflows/codex-review.yml/dispatches`, { ref: data.pr.base.repo.default_branch, inputs: { pr: String(p.number) } });
       }
       log(`${repo}#${p.number} ${short(head)} ${v.result}${v.action ? " +" + v.action : ""}`);

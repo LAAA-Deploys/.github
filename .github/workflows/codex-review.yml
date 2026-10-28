@@ -21,11 +21,16 @@ permissions:
   statuses: write
   pull-requests: write
   issues: write
-concurrency:
-  group: codex-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
-  cancel-in-progress: true
 jobs:
   gate:
+    # Concurrency sits on this job, after its filter, so a run the filter skips (an ordinary comment) never
+    # cancels an evaluation. Two groups per PR: the PR-event run keeps its own, so a Vercel or Codex comment
+    # seconds after a push cannot cancel it (a cancelled run leaves a cancelled check run on the head for
+    # good, a red X with every required check green; 77 heads on 10/27/2026). Comment and dispatch runs
+    # still replace each other.
+    concurrency:
+      group: codex-review-${{ github.event_name == 'pull_request_target' && 'pr' || 'comment' }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: true
     # Skip comment runs that cannot change the verdict: comments on issues, and new comments from
     # people that are not a Codex request. Edits and deletions always rerun.
     if: >-
@@ -35,6 +40,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: LAAA-Deploys/.github/codex-gate@2225022bf14c1da5c9c89de6e1275d6bc267884d
+      - uses: LAAA-Deploys/.github/codex-gate@63c2cb90814fc1c1025a686c3df83e45cf42d217
         with:
           token: ${{ github.token }}

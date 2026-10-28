@@ -1,7 +1,7 @@
 // The gate's verdicts on fixed GitHub data, no network:  node --test codex-gate/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, commentFor, STALL_MS } from "./gate.mjs";
+import { evaluate, commentFor, STALL_MS, THREAD_MS, RESPOND_MS, responderWorkflow } from "./gate.mjs";
 
 const NOW = Date.parse("2026-10-26T20:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -253,4 +253,90 @@ test("a clean head still waits while an older commit's Codex thread is open (laa
   assert.match(v.description, /1 Codex thread\(s\) still open/);
   v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, true]]) }, NOW);
   assert.equal(v.result, "success");
+});
+
+test("a Codex thread open for an hour with no newer commit fails the gate and tags Glen once", () => {
+  const old = (min) => ({ id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(min), body: "**![P2 Badge](x) Fix this**" });
+  const base = (min) => ({ issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)], inline: [old(min)] });
+  const head = { commit: { committer: { date: ago(120) } } };
+  const at = (min, extra = {}, headCommit = head) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base(min), ...extra,
+    statuses: [status(200)], threads: new Map([[5, false]]), headCommit }, NOW);
+  let v = at(THREAD_MS / 60000 - 5);
+  assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
+  v = at(THREAD_MS / 60000 + 5);
+  assert.equal(v.result, "failure");
+  assert.equal(v.action, "threads");
+  assert.match(v.description, /open over an hour/);
+  const notice = comment(ACTIONS, commentFor("threads", HEAD, 1), 1);
+  assert.match(notice.body, /@gscher1311 1 Codex thread/);
+  v = at(THREAD_MS / 60000 + 5, { issueComments: [summary("completed", HEAD, true), notice] });
+  assert.equal(v.result, "failure");
+  assert.equal(v.action, null);
+  // A push after the thread restarts the clock: the head commit is newer than the open thread.
+  v = at(THREAD_MS / 60000 + 5, {}, { commit: { committer: { date: ago(10) } } });
+  assert.equal(v.result, "pending");
+});
+
+test("a thread unanswered for half an hour is handed to the responder; one a person answered is not", () => {
+  const root = (min) => ({ id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(min), body: "**![P2 Badge](x) Fix this**" });
+  const head = { commit: { committer: { date: ago(120) } } };
+  const at = (min, inline) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)],
+    reviews: [review(9, HEAD)], inline, statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  let v = at(RESPOND_MS / 60000 - 5, [root(RESPOND_MS / 60000 - 5)]);
+  assert.equal(v.result, "pending");
+  assert.deepEqual(v.respond, []);
+  v = at(RESPOND_MS / 60000 + 5, [root(RESPOND_MS / 60000 + 5)]);
+  assert.equal(v.result, "pending");
+  assert.deepEqual(v.respond, [5]);
+  const reply = { id: 6, user: GLEN, in_reply_to_id: 5, created_at: ago(2), body: "Not a defect: the flag is parsed upstream." };
+  v = at(RESPOND_MS / 60000 + 5, [root(RESPOND_MS / 60000 + 5), reply]);
+  assert.deepEqual(v.respond, []);
+  // Past an hour it still names the thread, beside the tag for Glen.
+  v = at(THREAD_MS / 60000 + 5, [root(THREAD_MS / 60000 + 5)]);
+  assert.equal(v.result, "failure");
+  assert.deepEqual(v.respond, [5]);
+});
+
+test("a stale thread still tags Glen and names the responder when the head fails on a P1 or a false Fixed", () => {
+  const head = { commit: { committer: { date: ago(120) } } };
+  const p1 = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(THREAD_MS / 60000 + 5), body: "**![P1 Badge](x) Fix this**" };
+  let v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [p1], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "failure");
+  assert.match(v.description, /P0\/P1/);
+  assert.equal(v.action, "threads");
+  assert.deepEqual(v.respond, [5]);
+  const p2 = { ...p1, body: "**![P2 Badge](x) Fix this**" };
+  const fixed = { id: 6, user: GLEN, in_reply_to_id: 5, created_at: ago(70), body: "Fixed" };
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [p2, fixed], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "failure");
+  assert.match(v.description, /say fixed/);
+  assert.equal(v.action, "threads");
+  assert.deepEqual(v.respond, []);
+});
+
+test("the responder's own reply counts as an answer, so the sweep stops dispatching it", () => {
+  const head = { commit: { committer: { date: ago(120) } } };
+  const root = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(RESPOND_MS / 60000 + 5), body: "**![P2 Badge](x) Fix this**" };
+  const reply = { id: 6, user: { login: "claude[bot]", type: "Bot" }, in_reply_to_id: 5, created_at: ago(1), body: "Not a defect: the flag is parsed upstream." };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [root, reply], statuses: [status(200)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.deepEqual(v.respond, []);
+});
+
+test("a freshly pushed head gets the grace period even when its commit date and the thread are old", () => {
+  const head = { commit: { committer: { date: ago(180) } } };
+  const root = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(THREAD_MS / 60000 + 30), body: "**![P2 Badge](x) Fix this**" };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [root], statuses: [status(2)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
+  assert.deepEqual(v.respond, []);
+});
+
+test("the sweep dispatches each repo's responder caller, which has another name in the repo that holds the shared one", () => {
+  assert.equal(responderWorkflow("gscher1311/laaa-make"), "codex-responder.yml");
+  assert.equal(responderWorkflow("LAAA-Deploys/.github"), "codex-responder-caller.yml");
 });
