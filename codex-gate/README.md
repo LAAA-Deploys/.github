@@ -13,9 +13,10 @@ status to failure, "needs attention", and the workflow tags Glen (the PR watcher
 And a finding nobody answers goes to the Codex responder,
 [`.github/workflows/codex-responder.yml`](../.github/workflows/codex-responder.yml), a reusable
 workflow each gated repo calls: at once from the comment event when a bot opened the PR (no chat owns
-it), and by a dispatch from the watcher's sweep when a thread on any PR has had no reply from a person
+it), and by a dispatch from the watcher's sweep when a thread on any PR has had no reply
 for 30 minutes (`RESPOND_MS`), after the chat that opened it had its chance (laaa-agent-config README
-step 5). It fixes a real defect on the PR branch and pushes, or replies why not, then resolves the thread.
+step 5). It fixes a real defect on the PR branch and pushes, or replies why not, then resolves the thread,
+all as the Claude GitHub App on Glen's subscription (each repo's `CLAUDE_CODE_OAUTH_TOKEN` secret).
 
 This repo is on the gate too (`.github/workflows/codex-review.yml`), since it holds the gate.
 Its own pin moves in the same PR as a change here, or in the next one.

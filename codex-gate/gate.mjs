@@ -26,9 +26,9 @@
 
 export const CONTEXT = "codex-review";
 export const STALL_MS = 15 * 60 * 1000;
-// An open Codex thread with no reply from a person and no newer commit: after RESPOND_MS the watcher's
-// sweep dispatches the repo's codex-responder workflow for it (a chat's own PR had its chance; a bot's
-// PR got the responder at once from the comment event); after THREAD_MS the gate fails and tags Glen.
+// An open Codex thread with no reply from anyone but Codex and no newer commit: after RESPOND_MS the
+// watcher's sweep dispatches the repo's codex-responder workflow for it (a chat's own PR had its chance;
+// a bot's PR got the responder at once from the comment event); after THREAD_MS the gate tags Glen.
 export const RESPOND_MS = 30 * 60 * 1000;
 export const THREAD_MS = 60 * 60 * 1000;
 // Codex posts a run's findings within seconds of marking its summary completed.
@@ -99,11 +99,27 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
     (state.has_any_findings === false || headFindings.length > 0 || (settled && headReviewIds.size === 0));
 
   if (completed) {
+    // Every Codex thread on the PR, on any commit, is answered and resolved before the gate passes:
+    // branch protection requires conversation resolution, so a gate that passed with an older thread open
+    // showed green on a PR that could not merge (laaa-platform #415, 10/26/2026). Resolving a thread starts
+    // no workflow run (a review-comment event would run the PR's own copy of the workflow), so the PR
+    // watcher rechecks within 15 minutes, or a chat runs the workflow. threads: root comment id -> resolved.
+    const open = threads ? inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && threads.get(c.id) === false) : [];
+    // Threads with no reply from anyone but Codex after RESPOND_MS: the sweep hands each to the responder
+    // (ids of the roots). Open for THREAD_MS with no push after the newest thread: nobody is answering, so
+    // the verdict carries the tag for Glen once per head, whatever else it says; a push resets the clock.
+    const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, t(c.created_at)) > RESPOND_MS &&
+      !inline.some((r) => r.in_reply_to_id === c.id && !isCodex(r.user))).map((c) => c.id);
+    const newest = open.length ? Math.max(headTime, ...open.map((c) => t(c.created_at))) : 0;
+    const stale = Boolean(newest) && now - newest > THREAD_MS;
+    const noticedThreads = issueComments.some((c) => (c.body ?? "").includes(threadsMarker(head)));
+    const escalation = { action: stale && !noticedThreads ? "threads" : null, open: open.length, respond };
+
     if (blocking.length) {
       return {
         result: "failure",
         description: `Codex found ${blocking.length} P0/P1 on ${short(head)}: fix and push (Codex re-reviews), or Glen's "force merge".`,
-        action: null,
+        ...escalation,
       };
     }
     // A finding Codex raised on the head commit cannot have been fixed yet: no commit came after it.
@@ -115,37 +131,21 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
       return {
         result: "failure",
         description: `${claimedFixed.length} thread(s) on ${short(head)} say fixed, but no commit came after the finding: push the fix.`,
-        action: null,
+        ...escalation,
       };
     }
-    // Every Codex thread on the PR, on any commit, is answered and resolved before the gate passes:
-    // branch protection requires conversation resolution, so a gate that passed with an older thread open
-    // showed green on a PR that could not merge (laaa-platform #415, 10/26/2026). Resolving a thread starts
-    // no workflow run (a review-comment event would run the PR's own copy of the workflow), so the PR
-    // watcher rechecks within 15 minutes, or a chat runs the workflow. threads: root comment id -> resolved.
-    const open = threads ? inline.filter((c) => isCodex(c.user) && !c.in_reply_to_id && threads.get(c.id) === false) : [];
     if (open.length) {
-      // Open for an hour with no push after the newest thread: nobody is answering. Fail and tag Glen
-      // once per head, the same path a twice-stalled review takes; a push resets the head and the clock.
-      const newest = Math.max(headTime, ...open.map((c) => t(c.created_at)));
-      // Threads nobody has answered after RESPOND_MS: the sweep hands each to the responder (ids of the roots).
-      const respond = open.filter((c) => t(c.created_at) && now - Math.max(headTime, t(c.created_at)) > RESPOND_MS &&
-        !inline.some((r) => r.in_reply_to_id === c.id && !isBot(r.user))).map((c) => c.id);
-      if (newest && now - newest > THREAD_MS) {
-        const noticedThreads = issueComments.some((c) => (c.body ?? "").includes(threadsMarker(head)));
+      if (stale) {
         return {
           result: "failure",
           description: `Needs attention: ${open.length} Codex thread(s) open over an hour on ${short(head)} with no newer commit. Glen is tagged.`,
-          action: noticedThreads ? null : "threads",
-          open: open.length,
-          respond,
+          ...escalation,
         };
       }
       return {
         result: "pending",
         description: `Codex reviewed ${short(head)}; ${open.length} Codex thread(s) still open: reply on and resolve each.`,
-        action: null,
-        respond,
+        ...escalation,
       };
     }
     const n = headFindings.length;

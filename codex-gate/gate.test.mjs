@@ -297,3 +297,31 @@ test("a thread unanswered for half an hour is handed to the responder; one a per
   assert.equal(v.result, "failure");
   assert.deepEqual(v.respond, [5]);
 });
+
+test("a stale thread still tags Glen and names the responder when the head fails on a P1 or a false Fixed", () => {
+  const head = { commit: { committer: { date: ago(120) } } };
+  const p1 = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(THREAD_MS / 60000 + 5), body: "**![P1 Badge](x) Fix this**" };
+  let v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [p1], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "failure");
+  assert.match(v.description, /P0\/P1/);
+  assert.equal(v.action, "threads");
+  assert.deepEqual(v.respond, [5]);
+  const p2 = { ...p1, body: "**![P2 Badge](x) Fix this**" };
+  const fixed = { id: 6, user: GLEN, in_reply_to_id: 5, created_at: ago(70), body: "Fixed" };
+  v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [p2, fixed], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.equal(v.result, "failure");
+  assert.match(v.description, /say fixed/);
+  assert.equal(v.action, "threads");
+  assert.deepEqual(v.respond, []);
+});
+
+test("the responder's own reply counts as an answer, so the sweep stops dispatching it", () => {
+  const head = { commit: { committer: { date: ago(120) } } };
+  const root = { id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(RESPOND_MS / 60000 + 5), body: "**![P2 Badge](x) Fix this**" };
+  const reply = { id: 6, user: { login: "claude[bot]", type: "Bot" }, in_reply_to_id: 5, created_at: ago(1), body: "Not a defect: the flag is parsed upstream." };
+  const v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)],
+    inline: [root, reply], statuses: [status(20)], threads: new Map([[5, false]]), headCommit: head }, NOW);
+  assert.deepEqual(v.respond, []);
+});
