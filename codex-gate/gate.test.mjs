@@ -1,7 +1,7 @@
 // The gate's verdicts on fixed GitHub data, no network:  node --test codex-gate/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, commentFor, STALL_MS } from "./gate.mjs";
+import { evaluate, commentFor, STALL_MS, THREAD_MS } from "./gate.mjs";
 
 const NOW = Date.parse("2026-10-26T20:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -253,4 +253,27 @@ test("a clean head still waits while an older commit's Codex thread is open (laa
   assert.match(v.description, /1 Codex thread\(s\) still open/);
   v = evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base2, statuses: [status(20)], threads: new Map([[5, true]]) }, NOW);
   assert.equal(v.result, "success");
+});
+
+test("a Codex thread open for an hour with no newer commit fails the gate and tags Glen once", () => {
+  const old = (min) => ({ id: 5, user: CODEX, pull_request_review_id: 9, created_at: ago(min), body: "**![P2 Badge](x) Fix this**" });
+  const base = (min) => ({ issueComments: [summary("completed", HEAD, true)], reviews: [review(9, HEAD)], inline: [old(min)] });
+  const head = { commit: { committer: { date: ago(120) } } };
+  const at = (min, extra = {}, headCommit = head) => evaluate({ pr: { head: { sha: HEAD }, draft: false }, ...base(min), ...extra,
+    statuses: [status(20)], threads: new Map([[5, false]]), headCommit }, NOW);
+  let v = at(THREAD_MS / 60000 - 5);
+  assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
+  v = at(THREAD_MS / 60000 + 5);
+  assert.equal(v.result, "failure");
+  assert.equal(v.action, "threads");
+  assert.match(v.description, /open over an hour/);
+  const notice = comment(ACTIONS, commentFor("threads", HEAD, 1), 1);
+  assert.match(notice.body, /@gscher1311 1 Codex thread/);
+  v = at(THREAD_MS / 60000 + 5, { issueComments: [summary("completed", HEAD, true), notice] });
+  assert.equal(v.result, "failure");
+  assert.equal(v.action, null);
+  // A push after the thread restarts the clock: the head commit is newer than the open thread.
+  v = at(THREAD_MS / 60000 + 5, {}, { commit: { committer: { date: ago(10) } } });
+  assert.equal(v.result, "pending");
 });

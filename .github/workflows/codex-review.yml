@@ -21,8 +21,11 @@ permissions:
   statuses: write
   pull-requests: write
   issues: write
+# Two concurrency groups per PR: the PR-event run keeps its own, so a comment run never cancels it
+# (a cancelled run leaves a cancelled check run on the head for good: 77 heads on 10/27/2026, every
+# one showing a red X with all required checks green). Comment and dispatch runs still replace each other.
 concurrency:
-  group: codex-review-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+  group: codex-review-${{ github.event_name == 'pull_request_target' && 'pr' || 'comment' }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
   cancel-in-progress: true
 jobs:
   gate:
