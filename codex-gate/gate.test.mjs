@@ -1,7 +1,7 @@
 // The gate's verdicts on fixed GitHub data, no network:  node --test codex-gate/
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { evaluate, commentFor, STALL_MS, THREAD_MS, RESPOND_MS, responderWorkflow } from "./gate.mjs";
+import { evaluate, commentFor, STALL_MS, MISSED_MS, THREAD_MS, RESPOND_MS, responderWorkflow } from "./gate.mjs";
 
 const NOW = Date.parse("2026-10-26T20:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -32,6 +32,25 @@ test("a completed review of the head with no findings passes", () => {
 test("a review of an older commit does not count for the new head", () => {
   const v = run({ issueComments: [summary("completed", OLD, false)], reviews: [review(9, OLD)], inline: [finding(5, 9, 1)], statuses: [status(3)] });
   assert.equal(v.result, "pending");
+  assert.equal(v.action, null);
+});
+
+test("a head Codex missed is asked for after the short wait, not the stall wait", () => {
+  const m = MISSED_MS / 60000;
+  // Codex finished the older commit after the head arrived and started nothing for the head.
+  let v = run({ issueComments: [summary("completed", OLD, false, m + 1)], statuses: [status(m + 2)] });
+  assert.equal(v.action, "retry");
+  assert.match(v.description, /missed/);
+  // Inside the short wait, Codex may still be picking the push up.
+  v = run({ issueComments: [summary("completed", OLD, false, m - 1)], statuses: [status(m + 2)] });
+  assert.equal(v.action, null);
+  v = run({ issueComments: [summary("completed", OLD, false, 30)], statuses: [status(m - 1)] });
+  assert.equal(v.action, null);
+  // A review that is running, on any commit, gets the full stall wait.
+  v = run({ issueComments: [summary("running", OLD, null, m + 1)], statuses: [status(m + 2)] });
+  assert.equal(v.action, null);
+  // The one retry is still the only one.
+  v = run({ issueComments: [summary("completed", OLD, false, m + 3), comment(GLEN, "@codex review", 1)], statuses: [status(m + 4)] });
   assert.equal(v.action, null);
 });
 
