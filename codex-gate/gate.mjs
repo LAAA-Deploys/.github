@@ -14,6 +14,9 @@
 //   - A review that failed, or made no progress for STALL_MS, is asked for once more. If that one
 //     also fails or stalls, the status turns to failure and Glen is tagged on the PR, so GitHub
 //     notifies him. Nothing ever passes without a review.
+//   - A head Codex provably missed is asked for after MISSED_MS, not STALL_MS: its summary shows a
+//     finished review of an older commit and nothing running, so there is no review to wait for
+//     (11/09/2026: a push that landed while Codex reviewed the commit before it was never picked up).
 //
 // Two entry points, and neither checks out or runs anything from the PR:
 //   --event: a repo's codex-review workflow, on PR and comment events and on a dispatch. It alone
@@ -26,6 +29,8 @@
 
 export const CONTEXT = "codex-review";
 export const STALL_MS = 15 * 60 * 1000;
+// Codex starts a push's review within seconds; this long after it finished an older commit, it missed the head.
+export const MISSED_MS = 3 * 60 * 1000;
 // An open Codex thread with no reply from anyone but Codex and no newer commit: after RESPOND_MS the
 // watcher's sweep dispatches the repo's codex-responder workflow for it (a chat's own PR had its chance;
 // a bot's PR got the responder at once from the comment event); after THREAD_MS the gate tags Glen.
@@ -166,14 +171,17 @@ export function evaluate({ pr, issueComments, reviews, inline, statuses, headCom
   const failedAt = onHead && status === "failed" ? t(summary.updated_at) : 0;
   const lastProgress = Math.max(since, retryAt, onHead ? t(summary.updated_at) : 0);
   const stalled = now - lastProgress > STALL_MS;
+  // Codex's summary names an older commit and that review is over, so nothing is running for this head.
+  const missed = Boolean(summary) && !onHead && (status === "completed" || status === "failed") &&
+    now - Math.max(since, t(summary.updated_at)) > MISSED_MS;
 
   // Findings that never become readable fall into the stall path like any other missing review.
   if (onHead && status === "completed" && !stalled) {
     return { result: "pending", description: `Codex finished ${short(head)}; reading its findings.`, action: null, settling: true };
   }
   if (!retryAt) {
-    if (failedAt || stalled) {
-      return { result: "pending", description: `Codex ${failedAt ? "failed" : "stalled"} on ${short(head)}; asking once more.`, action: "retry" };
+    if (failedAt || stalled || missed) {
+      return { result: "pending", description: `Codex ${failedAt ? "failed" : stalled ? "stalled" : "missed"} on ${short(head)}; asking once more.`, action: "retry" };
     }
     return { result: "pending", description: `Waiting for Codex to review ${short(head)}.`, action: null };
   }
