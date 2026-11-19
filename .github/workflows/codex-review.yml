@@ -40,6 +40,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: LAAA-Deploys/.github/codex-gate@63c2cb90814fc1c1025a686c3df83e45cf42d217
+      - uses: LAAA-Deploys/.github/codex-gate@06268028e4a62aeda2b0ac08518f93575c517b34
         with:
           token: ${{ github.token }}
